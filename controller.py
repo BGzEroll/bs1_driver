@@ -36,6 +36,7 @@ class Controller:
         self.ble.stop()
         if self.thread and self.thread.is_alive():
             self.thread.join(timeout=3)
+        self.temp_reader.close()
         self.save_learning(force=True)
 
     def run_loop(self) -> None:
@@ -46,19 +47,30 @@ class Controller:
             if not self.ble.is_connected() and time.monotonic() >= self.reconnect_after:
                 self.try_connect()
 
-            sample = self.temp_reader.read()
+            sample = self.temp_reader.read(cfg.get("temperature_selection"))
             self.state.update(
                 cpu_temp=sample.cpu_temp,
                 gpu_temp=sample.gpu_temp,
+                cpu_power=round(sample.cpu_power, 1),
                 gpu_power=round(sample.gpu_power, 1),
                 control_temp=sample.control_temp,
                 control_source=sample.control_source,
+                cpu_model=sample.cpu_model,
+                gpu_model=sample.gpu_model,
+                selected_gpu_device=sample.selected_gpu_device,
+                cpu_sensors=sample.cpu_sensors,
+                gpu_sensors=sample.gpu_sensors,
+                gpu_devices=sample.gpu_devices,
+                bridge_ok=sample.bridge_ok,
+                bridge_error=sample.bridge_error,
                 heartbeat_age=round(time.monotonic() - self.ble.last_heartbeat_at, 1)
                 if self.ble.last_heartbeat_at
                 else 0,
             )
             if sample.error:
                 self.state.set_error(sample.error)
+            elif str(self.state.snapshot().get("last_error") or "").startswith("CPU temperature unavailable"):
+                self.state.clear_error()
 
             if self.ble.is_connected() and sample.control_temp > 0:
                 snapshot = self.state.snapshot()
@@ -66,7 +78,7 @@ class Controller:
                     {
                         "cpu_temp": sample.cpu_temp,
                         "gpu_temp": sample.gpu_temp,
-                        "cpu_power": 0.0,
+                        "cpu_power": sample.cpu_power,
                         "gpu_power": sample.gpu_power,
                         "control_temp": sample.control_temp,
                         "control_source": sample.control_source,
@@ -170,6 +182,12 @@ class Controller:
                 next_cfg["smart_control"] = smart
             if "temp_update_rate" in patch:
                 next_cfg["temp_update_rate"] = patch["temp_update_rate"]
+            if "temperature_selection" in patch and isinstance(patch["temperature_selection"], dict):
+                selection = dict(next_cfg.get("temperature_selection", {}))
+                for key in ("gpu_device", "cpu_sensors", "gpu_sensor"):
+                    if key in patch["temperature_selection"]:
+                        selection[key] = patch["temperature_selection"][key]
+                next_cfg["temperature_selection"] = selection
             if "autostart" in patch:
                 next_cfg["autostart"] = bool(patch["autostart"])
             self.config = normalize_config(next_cfg)

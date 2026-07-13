@@ -133,6 +133,34 @@ INDEX_HTML = r"""<!doctype html>
     </section>
 
     <section class="panel">
+      <div class="panel-title baseline-title">
+        <h2>温度基准</h2>
+        <span class="fixed-source">CPU/GPU 较高值</span>
+      </div>
+      <div class="baseline-grid">
+        <div class="baseline-column">
+          <div class="baseline-heading"><strong>CPU 基准</strong><b id="cpu-baseline-temp">--</b></div>
+          <label>处理器设备
+            <div id="cpu-model" class="readonly-field">等待识别...</div>
+          </label>
+          <label>CPU 传感器（多选后取平均）
+            <select id="cpu-sensors" multiple size="2" aria-label="CPU 温度传感器"></select>
+          </label>
+        </div>
+        <div class="baseline-column">
+          <div class="baseline-heading"><strong>GPU 基准</strong><b id="gpu-baseline-temp">--</b></div>
+          <label>GPU 设备
+            <select id="gpu-device" aria-label="GPU 设备"></select>
+          </label>
+          <label>GPU 传感器
+            <select id="gpu-sensor" aria-label="GPU 温度传感器"></select>
+          </label>
+        </div>
+      </div>
+      <div class="baseline-foot">当前控制温度：<strong id="baseline-control-temp">--</strong></div>
+    </section>
+
+    <section class="panel">
       <div class="panel-title">
         <h2>智能控温</h2>
         <div class="actions">
@@ -251,6 +279,48 @@ input {
   background: #fbfefd;
   color: var(--ink);
 }
+select {
+  width: 100%;
+  margin-top: 5px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 8px 9px;
+  background: #fbfefd;
+  color: var(--ink);
+}
+select[multiple] { min-height: 68px; padding: 4px; }
+select[multiple] option { padding: 6px; border-radius: 4px; }
+.baseline-title { margin-bottom: 10px; }
+.fixed-source {
+  padding: 5px 9px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--accent-2);
+  background: #f7fbfa;
+  font-size: 12px;
+  font-weight: 600;
+}
+.baseline-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.baseline-column { min-width: 0; padding: 4px 18px 6px 0; display: grid; gap: 12px; }
+.baseline-column + .baseline-column { border-left: 1px solid var(--line); padding: 4px 0 6px 18px; }
+.baseline-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.baseline-heading strong { font-size: 14px; }
+.baseline-heading b { color: var(--accent); font-size: 18px; }
+.readonly-field {
+  width: 100%;
+  min-height: 36px;
+  margin-top: 5px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 8px 9px;
+  background: #f7fbfa;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.baseline-foot { margin-top: 12px; color: var(--muted); font-size: 12px; }
+.baseline-foot strong { color: var(--ink); }
 .toggles { display: flex; align-items: center; flex-wrap: wrap; gap: 14px; margin-top: 14px; }
 .toggles label { display: flex; align-items: center; gap: 7px; }
 .toggles input { width: auto; margin: 0; }
@@ -302,6 +372,9 @@ code { color: var(--accent-2); }
   header, .panel-title { align-items: flex-start; flex-direction: column; }
   .status-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .baseline-grid { grid-template-columns: 1fr; }
+  .baseline-column { padding: 4px 0 14px; }
+  .baseline-column + .baseline-column { border-left: 0; border-top: 1px solid var(--line); padding: 14px 0 4px; }
   .actions { justify-content: flex-start; }
 }
 """
@@ -309,6 +382,8 @@ code { color: var(--accent-2); }
 
 APP_JS = r"""let config = null;
 let currentTemp = 0;
+let latestState = null;
+let temperatureMetadataSignature = '';
 
 const $ = (id) => document.getElementById(id);
 
@@ -332,6 +407,7 @@ function clamp(v, low, high) { return Math.max(low, Math.min(high, v)); }
 
 async function refreshState() {
   const s = await getJson('/api/state');
+  latestState = s;
   currentTemp = Number(s.control_temp || 0);
   $('connected').textContent = s.connected ? '已连接' : '未连接';
   $('cpu').textContent = tempText(s.cpu_temp || 0);
@@ -341,6 +417,11 @@ async function refreshState() {
   $('target-rpm').textContent = rpmText(s.target_rpm || s.last_sent_rpm || 0);
   $('error').textContent = s.last_error || '正常';
   $('current-temp-label').textContent = currentTemp > 0 ? `当前 ${Math.round(currentTemp)}°C` : '当前 --°C';
+  $('cpu-baseline-temp').textContent = tempText(s.cpu_temp || 0);
+  $('gpu-baseline-temp').textContent = tempText(s.gpu_temp || 0);
+  $('baseline-control-temp').textContent = tempText(currentTemp);
+  $('cpu-model').textContent = s.cpu_model || '等待识别...';
+  renderTemperatureBaseline(s);
   if (config) drawChart();
 }
 
@@ -355,7 +436,85 @@ async function loadConfig() {
   $('learning').checked = !!sc.learning;
   $('spike-filter').checked = !!sc.filter_transient_spike;
   $('predictive').checked = !!sc.predictive_boost;
+  temperatureMetadataSignature = '';
+  if (latestState) renderTemperatureBaseline(latestState);
   drawChart();
+}
+
+function replaceOptions(select, options, selectedValues) {
+  const selected = new Set(Array.isArray(selectedValues) ? selectedValues : [selectedValues]);
+  select.replaceChildren(...options.map(item => {
+    const option = new Option(item.label, item.value, false, selected.has(item.value));
+    option.disabled = !!item.disabled;
+    return option;
+  }));
+}
+
+function renderTemperatureBaseline(s) {
+  if (!config) return;
+  const selection = config.temperature_selection || {};
+  const cpuSensors = Array.isArray(s.cpu_sensors) ? s.cpu_sensors : [];
+  const gpuDevices = Array.isArray(s.gpu_devices) ? s.gpu_devices : [];
+  const configuredDevice = selection.gpu_device || 'auto';
+  const sensorIdentity = (sensors) => (Array.isArray(sensors) ? sensors : []).map(sensor => ({
+    key: sensor.key,
+    name: sensor.name
+  }));
+  const signature = JSON.stringify({
+    cpuSensors: sensorIdentity(cpuSensors),
+    gpuDevices: gpuDevices.map(device => ({
+      key: device.key,
+      name: device.name,
+      vendor: device.vendor,
+      sensors: sensorIdentity(device.sensors)
+    })),
+    gpuSensors: sensorIdentity(s.gpu_sensors),
+    selectedGpuDevice: s.selected_gpu_device || 'auto',
+    selection
+  });
+  if (signature === temperatureMetadataSignature) return;
+  temperatureMetadataSignature = signature;
+
+  const cpuSelect = $('cpu-sensors');
+  const selectedCpu = Array.isArray(selection.cpu_sensors) ? selection.cpu_sensors : [];
+  const cpuOptions = cpuSensors.length
+    ? [{ value: '', label: '自动选择（推荐）', disabled: selectedCpu.length > 0 }, ...cpuSensors.map(sensor => ({
+        value: sensor.key,
+        label: `${sensor.name} (${sensor.value}°C)`
+      }))]
+    : [{ value: '', label: '等待传感器...', disabled: true }];
+  replaceOptions(cpuSelect, cpuOptions, selectedCpu.length ? selectedCpu : ['']);
+  cpuSelect.disabled = cpuSensors.length === 0;
+  cpuSelect.size = Math.min(4, Math.max(2, cpuOptions.length));
+
+  replaceOptions($('gpu-device'), [
+    { value: 'auto', label: '自动选择（推荐）' },
+    ...gpuDevices.map(device => ({
+      value: device.key,
+      label: `${device.vendor ? `${device.vendor.toUpperCase()} · ` : ''}${device.name}`
+    }))
+  ], configuredDevice);
+  $('gpu-device').disabled = gpuDevices.length === 0;
+
+  const activeDeviceKey = configuredDevice === 'auto' ? (s.selected_gpu_device || 'auto') : configuredDevice;
+  const activeDevice = gpuDevices.find(device => device.key === activeDeviceKey);
+  const gpuSensors = activeDevice && Array.isArray(activeDevice.sensors) && activeDevice.sensors.length
+    ? activeDevice.sensors
+    : (Array.isArray(s.gpu_sensors) ? s.gpu_sensors : []);
+  replaceOptions($('gpu-sensor'), [
+    { value: 'auto', label: '自动选择（推荐）' },
+    ...gpuSensors.map(sensor => ({ value: sensor.key, label: `${sensor.name} (${sensor.value}°C)` }))
+  ], selection.gpu_sensor || 'auto');
+  $('gpu-sensor').disabled = gpuSensors.length === 0;
+}
+
+async function saveTemperatureSelection(patch) {
+  const current = config.temperature_selection || {};
+  config = await postJson('/api/config', {
+    temperature_selection: { ...current, ...patch }
+  });
+  temperatureMetadataSignature = '';
+  if (latestState) renderTemperatureBaseline(latestState);
 }
 
 function learnedCurve() {
@@ -489,6 +648,16 @@ $('save').addEventListener('click', saveConfig);
 $('reconnect').addEventListener('click', () => postJson('/api/reconnect'));
 $('reset-defaults').addEventListener('click', resetDefaults);
 $('reset-learning').addEventListener('click', resetLearning);
+$('cpu-sensors').addEventListener('change', (event) => {
+  const values = Array.from(event.currentTarget.selectedOptions).map(option => option.value).filter(Boolean);
+  saveTemperatureSelection({ cpu_sensors: values });
+});
+$('gpu-device').addEventListener('change', (event) => {
+  saveTemperatureSelection({ gpu_device: event.currentTarget.value, gpu_sensor: 'auto' });
+});
+$('gpu-sensor').addEventListener('change', (event) => {
+  saveTemperatureSelection({ gpu_sensor: event.currentTarget.value });
+});
 
 loadConfig();
 refreshState();

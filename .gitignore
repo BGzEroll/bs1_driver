@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+
+/build/
+/dist/
+/BS1Controller.spec
+
+/helpers/bin/
+/helpers/obj/
+/helpers/publish/
+

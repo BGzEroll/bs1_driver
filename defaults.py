@@ -47,6 +47,12 @@ DEFAULT_SMART_CONTROL = {
     "noise_profile_updated_at": 0,
 }
 
+DEFAULT_TEMPERATURE_SELECTION = {
+    "gpu_device": "auto",
+    "cpu_sensors": [],
+    "gpu_sensor": "auto",
+}
+
 
 def default_config() -> dict:
     return {
@@ -55,6 +61,7 @@ def default_config() -> dict:
         "autostart": False,
         "temp_update_rate": 2,
         "temp_source": "max",
+        "temperature_selection": dict(DEFAULT_TEMPERATURE_SELECTION),
         "fan_curve": [dict(point) for point in DEFAULT_FAN_CURVE],
         "smart_control": dict(DEFAULT_SMART_CONTROL),
     }
