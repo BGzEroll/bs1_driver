@@ -90,6 +90,7 @@ class BS1BleClient:
         self.device_name = ""
         self.device_address = ""
         self._heartbeat_task: asyncio.Task | None = None
+        self.last_heartbeat_at = 0.0
         self._lock = threading.RLock()
 
     def start(self) -> None:
@@ -168,8 +169,10 @@ class BS1BleClient:
             client = self.client
             self.client = None
         heartbeat_task = self._heartbeat_task
-        if heartbeat_task and heartbeat_task is not asyncio.current_task():
+        current_task = asyncio.current_task()
+        if heartbeat_task and heartbeat_task is not current_task:
             heartbeat_task.cancel()
+        if heartbeat_task:
             self._heartbeat_task = None
         if client:
             try:
@@ -201,6 +204,7 @@ class BS1BleClient:
             index += 1
             try:
                 await self._write(frame)
+                self.last_heartbeat_at = time.monotonic()
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -216,4 +220,8 @@ class BS1BleClient:
     def _on_disconnect(self, _client) -> None:
         with self._lock:
             self.client = None
+            heartbeat_task = self._heartbeat_task
+            self._heartbeat_task = None
+        if heartbeat_task and not heartbeat_task.done():
+            heartbeat_task.cancel()
         self.disconnect_callback("BS1 BLE disconnected")

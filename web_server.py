@@ -167,7 +167,10 @@ INDEX_HTML = r"""<!doctype html>
         <span><i class="learned"></i>学习曲线</span>
         <span><i class="current"></i><b id="current-temp-label">当前 --°C</b></span>
       </div>
-      <svg id="curve-chart" viewBox="0 0 760 300" role="img" aria-label="风扇曲线"></svg>
+      <div class="chart-wrap">
+        <svg id="curve-chart" viewBox="0 0 760 300" role="img" aria-label="风扇曲线"></svg>
+        <div id="curve-tooltip" class="curve-tooltip" aria-hidden="true"></div>
+      </div>
     </section>
 
     <section class="panel subtle">
@@ -256,15 +259,43 @@ input {
 .legend span { display: inline-flex; align-items: center; gap: 7px; }
 .legend i { width: 24px; height: 3px; border-radius: 999px; display: inline-block; }
 .legend .base { background: var(--accent-2); }
-.legend .learned { background: var(--accent); }
+.legend .learned { background: repeating-linear-gradient(to right, var(--accent) 0 7px, transparent 7px 12px); }
 .legend .current { width: 2px; height: 18px; background: repeating-linear-gradient(to bottom, var(--danger) 0 4px, transparent 4px 8px); }
+.chart-wrap { position: relative; }
 svg { width: 100%; height: 300px; background: #f7fbfa; border: 1px solid var(--line); border-radius: 8px; }
 .axis-label { fill: #65736f; font-size: 12px; }
 .tick { stroke: #dbe7e3; stroke-width: 1; }
 .curve-base { fill: none; stroke: var(--accent-2); stroke-width: 3; }
-.curve-learned { fill: none; stroke: var(--accent); stroke-width: 3; }
+.curve-learned { fill: none; stroke: var(--accent); stroke-width: 3; stroke-dasharray: 8 7; stroke-linecap: round; }
+.curve-node { cursor: crosshair; }
+.node-hit { fill: transparent; pointer-events: all; }
+.node-base { fill: #ffffff; stroke: var(--accent-2); stroke-width: 2; }
+.node-learned { fill: #ffffff; stroke: var(--accent); stroke-width: 2; }
+.curve-node:hover .node-base,
+.curve-node:hover .node-learned { stroke-width: 3; }
 .current-line { stroke: var(--danger); stroke-width: 2; stroke-dasharray: 6 6; }
 .current-tag { fill: var(--danger); font-size: 12px; font-weight: 600; }
+.curve-tooltip {
+  position: absolute;
+  min-width: 158px;
+  padding: 10px 12px;
+  border: 1px solid rgba(20,34,31,.12);
+  border-radius: 8px;
+  background: rgba(255,255,255,.96);
+  box-shadow: 0 12px 34px rgba(20,34,31,.16);
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.7;
+  opacity: 0;
+  transform: translate(12px, -8px);
+  pointer-events: none;
+  transition: opacity .18s ease, transform .18s ease;
+  z-index: 5;
+}
+.curve-tooltip.show { opacity: 1; transform: translate(12px, -12px); }
+.curve-tooltip strong { display: block; font-size: 13px; margin-bottom: 4px; }
+.curve-tooltip span { display: flex; justify-content: space-between; gap: 18px; color: var(--muted); }
+.curve-tooltip b { color: var(--ink); font-weight: 600; }
 .subtle { color: var(--muted); display: grid; gap: 8px; }
 code { color: var(--accent-2); }
 @media (max-width: 860px) {
@@ -344,6 +375,41 @@ function learnedCurve() {
   });
 }
 
+function showCurveTooltip(event) {
+  const tooltip = $('curve-tooltip');
+  const wrap = tooltip.parentElement.getBoundingClientRect();
+  const temp = event.currentTarget.dataset.temp;
+  const baseRpm = event.currentTarget.dataset.baseRpm;
+  const learnedRpm = event.currentTarget.dataset.learnedRpm;
+  tooltip.innerHTML = `
+    <strong>${temp}°C</strong>
+    <span>基础曲线 <b>${baseRpm} RPM</b></span>
+    <span>学习曲线 <b>${learnedRpm} RPM</b></span>
+  `;
+  tooltip.style.left = `${event.clientX - wrap.left + 12}px`;
+  tooltip.style.top = `${event.clientY - wrap.top - 6}px`;
+  tooltip.classList.add('show');
+}
+
+function moveCurveTooltip(event) {
+  const tooltip = $('curve-tooltip');
+  const wrap = tooltip.parentElement.getBoundingClientRect();
+  tooltip.style.left = `${event.clientX - wrap.left + 12}px`;
+  tooltip.style.top = `${event.clientY - wrap.top - 6}px`;
+}
+
+function hideCurveTooltip() {
+  $('curve-tooltip').classList.remove('show');
+}
+
+function bindCurveTooltip() {
+  document.querySelectorAll('.curve-node').forEach((node) => {
+    node.addEventListener('mouseenter', showCurveTooltip);
+    node.addEventListener('mousemove', moveCurveTooltip);
+    node.addEventListener('mouseleave', hideCurveTooltip);
+  });
+}
+
 function drawChart() {
   const svg = $('curve-chart');
   const base = config?.fan_curve || [];
@@ -380,13 +446,20 @@ function drawChart() {
     <line x1="${left}" y1="${top}" x2="${left}" y2="${bottom}" stroke="#b9c9c4"></line>
     <path class="curve-base" d="${path(base)}"></path>
     <path class="curve-learned" d="${path(learned)}"></path>
-    ${base.map(p => `<circle cx="${x(p.temperature).toFixed(1)}" cy="${y(p.rpm).toFixed(1)}" r="3.5" fill="#2878b8"></circle>`).join('')}
-    ${learned.map(p => `<circle cx="${x(p.temperature).toFixed(1)}" cy="${y(p.rpm).toFixed(1)}" r="3.5" fill="#16856b"></circle>`).join('')}
+    ${base.map((p, i) => `
+      <g class="curve-node" data-temp="${p.temperature}" data-base-rpm="${p.rpm}" data-learned-rpm="${learned[i].rpm}">
+        <circle class="node-hit" cx="${x(p.temperature).toFixed(1)}" cy="${y(p.rpm).toFixed(1)}" r="12"></circle>
+        <circle class="node-hit" cx="${x(p.temperature).toFixed(1)}" cy="${y(learned[i].rpm).toFixed(1)}" r="12"></circle>
+        <circle class="node-base" cx="${x(p.temperature).toFixed(1)}" cy="${y(p.rpm).toFixed(1)}" r="4"></circle>
+        <circle class="node-learned" cx="${x(p.temperature).toFixed(1)}" cy="${y(learned[i].rpm).toFixed(1)}" r="4"></circle>
+      </g>
+    `).join('')}
     ${currentX === null ? '' : `
       <line class="current-line" x1="${currentX.toFixed(1)}" y1="${top}" x2="${currentX.toFixed(1)}" y2="${bottom}"></line>
       <text class="current-tag" x="${clamp(currentX + 8, left, right - 72).toFixed(1)}" y="20">当前 ${Math.round(currentTemp)}°C</text>
     `}
   `;
+  bindCurveTooltip();
 }
 
 async function saveConfig() {

@@ -24,6 +24,7 @@ class RuntimeState:
             "gear_setting": "",
             "selected_gear": "",
             "max_gear": "",
+            "heartbeat_age": 0,
             "last_error": "",
             "learning_dirty": False,
             "updated_at": int(time.time() * 1000),
@@ -43,4 +44,3 @@ class RuntimeState:
     def snapshot(self) -> dict[str, Any]:
         with self._lock:
             return dict(self._data)
-

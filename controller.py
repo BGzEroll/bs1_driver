@@ -53,6 +53,9 @@ class Controller:
                 gpu_power=round(sample.gpu_power, 1),
                 control_temp=sample.control_temp,
                 control_source=sample.control_source,
+                heartbeat_age=round(time.monotonic() - self.ble.last_heartbeat_at, 1)
+                if self.ble.last_heartbeat_at
+                else 0,
             )
             if sample.error:
                 self.state.set_error(sample.error)
@@ -79,6 +82,11 @@ class Controller:
                             self.state.update(last_sent_rpm=result.target_rpm)
                             self.state.clear_error()
                     except Exception as exc:
+                        try:
+                            self.ble.disconnect(timeout=2)
+                        except Exception:
+                            pass
+                        self.state.update(connected=False)
                         self.state.set_error(f"BLE write failed: {exc}")
                         self.reconnect_after = time.monotonic() + 5
                 if result.learning_changed:
