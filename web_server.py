@@ -120,7 +120,10 @@ INDEX_HTML = r"""<!doctype html>
       <div>
         <h1>BS1 Controller</h1>
       </div>
-      <button id="reconnect" type="button">重新连接</button>
+      <div class="header-actions">
+        <button id="reconnect" type="button">重新连接</button>
+        <button id="advanced-open" class="secondary" type="button">高级设置</button>
+      </div>
     </header>
 
     <section class="status-grid">
@@ -130,55 +133,6 @@ INDEX_HTML = r"""<!doctype html>
       <article><span>控制温度</span><strong id="control-temp">--</strong></article>
       <article><span>当前 RPM</span><strong id="current-rpm">--</strong></article>
       <article><span>目标 RPM</span><strong id="target-rpm">--</strong></article>
-    </section>
-
-    <section class="panel">
-      <div class="panel-title baseline-title">
-        <h2>温度基准</h2>
-        <span class="fixed-source">CPU/GPU 较高值</span>
-      </div>
-      <div class="baseline-grid">
-        <div class="baseline-column">
-          <div class="baseline-heading"><strong>CPU 基准</strong><b id="cpu-baseline-temp">--</b></div>
-          <label>处理器设备
-            <div id="cpu-model" class="readonly-field">等待识别...</div>
-          </label>
-          <label>CPU 传感器（多选后取平均）
-            <select id="cpu-sensors" multiple size="2" aria-label="CPU 温度传感器"></select>
-          </label>
-        </div>
-        <div class="baseline-column">
-          <div class="baseline-heading"><strong>GPU 基准</strong><b id="gpu-baseline-temp">--</b></div>
-          <label>GPU 设备
-            <select id="gpu-device" aria-label="GPU 设备"></select>
-          </label>
-          <label>GPU 传感器
-            <select id="gpu-sensor" aria-label="GPU 温度传感器"></select>
-          </label>
-        </div>
-      </div>
-      <div class="baseline-foot">当前控制温度：<strong id="baseline-control-temp">--</strong></div>
-    </section>
-
-    <section class="panel">
-      <div class="panel-title">
-        <h2>智能控温</h2>
-        <div class="actions">
-          <button id="save" type="button">保存配置</button>
-          <button id="reset-defaults" class="secondary" type="button">恢复默认配置</button>
-        </div>
-      </div>
-      <div class="form-grid">
-        <label>目标温度 <input id="target-temp" type="number" min="45" max="90" /></label>
-        <label>最小 RPM 变化 <input id="min-rpm-change" type="number" min="20" max="400" /></label>
-        <label>升速限幅 <input id="ramp-up" type="number" min="50" max="1200" /></label>
-        <label>降速限幅 <input id="ramp-down" type="number" min="50" max="1200" /></label>
-      </div>
-      <div class="toggles">
-        <label><input id="learning" type="checkbox" /> 自动学习</label>
-        <label><input id="spike-filter" type="checkbox" /> 温度尖峰过滤</label>
-        <label><input id="predictive" type="checkbox" /> 预测前馈</label>
-      </div>
     </section>
 
     <section class="panel">
@@ -200,11 +154,66 @@ INDEX_HTML = r"""<!doctype html>
       </div>
     </section>
 
-    <section class="panel subtle">
-      <div>配置文件：<code id="config-path">--</code></div>
-      <div>最近状态：<span id="error">--</span></div>
-    </section>
   </main>
+
+  <div id="advanced-backdrop" class="modal-backdrop" hidden>
+    <section class="advanced-dialog" role="dialog" aria-modal="true" aria-labelledby="advanced-title">
+      <div class="advanced-header">
+        <h2 id="advanced-title">高级设置</h2>
+        <button id="advanced-close" class="icon-button secondary" type="button" aria-label="关闭高级设置" title="关闭">&times;</button>
+      </div>
+      <div class="advanced-content">
+        <section class="advanced-section">
+          <div class="section-title baseline-title">
+            <h3>温度基准</h3>
+            <span class="fixed-source">CPU/GPU 较高值</span>
+          </div>
+          <div class="baseline-heading"><strong>GPU 基准</strong><b id="gpu-baseline-temp">--</b></div>
+          <div class="baseline-controls">
+            <div class="field-label">GPU 设备
+              <details id="gpu-device-menu" class="multi-select">
+                <summary id="gpu-device-summary">等待设备...</summary>
+                <div id="gpu-device-options" class="multi-select-options" role="radiogroup" aria-label="GPU 设备"></div>
+              </details>
+            </div>
+            <div class="field-label">GPU 传感器
+              <details id="gpu-sensor-menu" class="multi-select">
+                <summary id="gpu-sensor-summary">等待传感器...</summary>
+                <div id="gpu-sensor-options" class="multi-select-options" role="radiogroup" aria-label="GPU 温度传感器"></div>
+              </details>
+            </div>
+          </div>
+          <div class="baseline-foot">当前控制温度：<strong id="baseline-control-temp">--</strong></div>
+        </section>
+
+        <section class="advanced-section">
+          <div class="section-title">
+            <h3>智能控温</h3>
+            <div class="actions">
+              <button id="save" type="button">保存配置</button>
+              <button id="reset-defaults" class="secondary" type="button">恢复默认配置</button>
+            </div>
+          </div>
+          <div class="form-grid">
+            <label>目标温度 <input id="target-temp" type="number" min="45" max="90" /></label>
+            <label>最小 RPM 变化 <input id="min-rpm-change" type="number" min="20" max="400" /></label>
+            <label>升速限幅 <input id="ramp-up" type="number" min="50" max="1200" /></label>
+            <label>降速限幅 <input id="ramp-down" type="number" min="50" max="1200" /></label>
+          </div>
+          <div class="toggles">
+            <label><input id="learning" type="checkbox" /> 自动学习</label>
+            <label><input id="spike-filter" type="checkbox" /> 温度尖峰过滤</label>
+            <label><input id="predictive" type="checkbox" /> 预测前馈</label>
+          </div>
+        </section>
+
+        <section class="advanced-section advanced-status">
+          <div>配置文件：<code id="config-path">--</code></div>
+          <div>最近状态：<span id="error">--</span></div>
+        </section>
+      </div>
+    </section>
+  </div>
   <script src="/app.js"></script>
 </body>
 </html>
@@ -249,6 +258,7 @@ button.secondary {
   border-color: var(--line);
 }
 button.secondary:hover { background: #eef7f3; }
+.header-actions { display: flex; gap: 8px; }
 .actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
 .status-grid {
   display: grid;
@@ -269,7 +279,7 @@ article strong { display: block; margin-top: 8px; font-size: 22px; }
 .panel-title { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 14px; }
 .subhead { font-size: 13px; }
 .form-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
-label { color: var(--muted); font-size: 13px; }
+label, .field-label { color: var(--muted); font-size: 13px; }
 input {
   width: 100%;
   margin-top: 5px;
@@ -279,17 +289,106 @@ input {
   background: #fbfefd;
   color: var(--ink);
 }
-select {
+.multi-select { position: relative; margin-top: 5px; }
+.multi-select > summary {
+  position: relative;
   width: 100%;
-  margin-top: 5px;
+  min-height: 36px;
+  list-style: none;
+  cursor: pointer;
   border: 1px solid var(--line);
   border-radius: 7px;
-  padding: 8px 9px;
+  padding: 8px 34px 8px 9px;
   background: #fbfefd;
   color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-select[multiple] { min-height: 68px; padding: 4px; }
-select[multiple] option { padding: 6px; border-radius: 4px; }
+.multi-select > summary::-webkit-details-marker { display: none; }
+.multi-select > summary::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: 13px;
+  width: 7px;
+  height: 7px;
+  border-right: 2px solid var(--muted);
+  border-bottom: 2px solid var(--muted);
+  transform: translateY(-65%) rotate(45deg);
+}
+.multi-select[open] > summary::after { transform: translateY(-25%) rotate(225deg); }
+.multi-select.is-disabled > summary { cursor: default; color: var(--muted); background: #f7fbfa; }
+.multi-select-options {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 5px);
+  left: 0;
+  right: 0;
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fff;
+  box-shadow: 0 12px 28px rgba(20,34,31,.14);
+}
+.multi-select-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px;
+  border-radius: 5px;
+  color: var(--ink);
+  cursor: pointer;
+}
+.multi-select-option:hover { background: #eef7f3; }
+.multi-select-option input { width: auto; margin: 0; flex: none; }
+.multi-select-empty { padding: 7px; color: var(--muted); }
+.modal-backdrop {
+  position: fixed;
+  z-index: 100;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(20,34,31,.38);
+}
+.modal-backdrop[hidden] { display: none; }
+.advanced-dialog {
+  width: min(820px, 100%);
+  max-height: calc(100vh - 48px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: 0 24px 70px rgba(20,34,31,.24);
+}
+.advanced-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--line);
+}
+.icon-button {
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  font-size: 24px;
+  line-height: 1;
+}
+.advanced-content { overflow-y: auto; }
+.advanced-section { padding: 18px; }
+.advanced-section + .advanced-section { border-top: 1px solid var(--line); }
+.section-title { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 14px; }
+.section-title h3 { margin: 0; font-size: 16px; letter-spacing: 0; }
+.baseline-controls { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 12px; }
+.advanced-status { color: var(--muted); display: grid; gap: 8px; font-size: 13px; }
+body.modal-open { overflow: hidden; }
 .baseline-title { margin-bottom: 10px; }
 .fixed-source {
   padding: 5px 9px;
@@ -300,25 +399,9 @@ select[multiple] option { padding: 6px; border-radius: 4px; }
   font-size: 12px;
   font-weight: 600;
 }
-.baseline-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
-.baseline-column { min-width: 0; padding: 4px 18px 6px 0; display: grid; gap: 12px; }
-.baseline-column + .baseline-column { border-left: 1px solid var(--line); padding: 4px 0 6px 18px; }
 .baseline-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
 .baseline-heading strong { font-size: 14px; }
 .baseline-heading b { color: var(--accent); font-size: 18px; }
-.readonly-field {
-  width: 100%;
-  min-height: 36px;
-  margin-top: 5px;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  padding: 8px 9px;
-  background: #f7fbfa;
-  color: var(--ink);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 .baseline-foot { margin-top: 12px; color: var(--muted); font-size: 12px; }
 .baseline-foot strong { color: var(--ink); }
 .toggles { display: flex; align-items: center; flex-wrap: wrap; gap: 14px; margin-top: 14px; }
@@ -365,17 +448,16 @@ svg { width: 100%; height: 300px; background: #f7fbfa; border: 1px solid var(--l
 .curve-tooltip strong { display: block; font-size: 13px; margin-bottom: 4px; }
 .curve-tooltip span { display: flex; justify-content: space-between; gap: 18px; color: var(--muted); }
 .curve-tooltip b { color: var(--ink); font-weight: 600; }
-.subtle { color: var(--muted); display: grid; gap: 8px; }
 code { color: var(--accent-2); }
 @media (max-width: 860px) {
   main { padding: 18px; }
-  header, .panel-title { align-items: flex-start; flex-direction: column; }
+  header, .panel-title, .section-title { align-items: flex-start; flex-direction: column; }
   .status-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .baseline-grid { grid-template-columns: 1fr; }
-  .baseline-column { padding: 4px 0 14px; }
-  .baseline-column + .baseline-column { border-left: 0; border-top: 1px solid var(--line); padding: 14px 0 4px; }
+  .baseline-controls { grid-template-columns: 1fr; }
   .actions { justify-content: flex-start; }
+  .modal-backdrop { padding: 10px; }
+  .advanced-dialog { max-height: calc(100vh - 20px); }
 }
 """
 
@@ -417,10 +499,8 @@ async function refreshState() {
   $('target-rpm').textContent = rpmText(s.target_rpm || s.last_sent_rpm || 0);
   $('error').textContent = s.last_error || '正常';
   $('current-temp-label').textContent = currentTemp > 0 ? `当前 ${Math.round(currentTemp)}°C` : '当前 --°C';
-  $('cpu-baseline-temp').textContent = tempText(s.cpu_temp || 0);
   $('gpu-baseline-temp').textContent = tempText(s.gpu_temp || 0);
   $('baseline-control-temp').textContent = tempText(currentTemp);
-  $('cpu-model').textContent = s.cpu_model || '等待识别...';
   renderTemperatureBaseline(s);
   if (config) drawChart();
 }
@@ -441,19 +521,45 @@ async function loadConfig() {
   drawChart();
 }
 
-function replaceOptions(select, options, selectedValues) {
-  const selected = new Set(Array.isArray(selectedValues) ? selectedValues : [selectedValues]);
-  select.replaceChildren(...options.map(item => {
-    const option = new Option(item.label, item.value, false, selected.has(item.value));
-    option.disabled = !!item.disabled;
-    return option;
-  }));
+function renderSingleSelect(menuId, summaryId, optionsId, items, selectedValue, enabled, emptyText, autoDetail = '') {
+  const menu = $(menuId);
+  const summary = $(summaryId);
+  const options = $(optionsId);
+  menu.classList.toggle('is-disabled', !enabled);
+  summary.setAttribute('aria-disabled', enabled ? 'false' : 'true');
+  if (!enabled) {
+    menu.open = false;
+    summary.textContent = emptyText;
+    const empty = document.createElement('div');
+    empty.className = 'multi-select-empty';
+    empty.textContent = emptyText;
+    options.replaceChildren(empty);
+    return;
+  }
+
+  const selected = items.find(item => item.value === selectedValue) || items[0];
+  summary.textContent = selected.value === 'auto' && autoDetail
+    ? `${selected.label} - ${autoDetail}`
+    : selected.label;
+  const createOption = (item) => {
+    const label = document.createElement('label');
+    label.className = 'multi-select-option';
+    const input = document.createElement('input');
+    input.type = 'radio';
+    input.name = `${menuId}-selection`;
+    input.value = item.value;
+    input.checked = item.value === selected.value;
+    const text = document.createElement('span');
+    text.textContent = item.label;
+    label.append(input, text);
+    return label;
+  };
+  options.replaceChildren(...items.map(createOption));
 }
 
 function renderTemperatureBaseline(s) {
   if (!config) return;
   const selection = config.temperature_selection || {};
-  const cpuSensors = Array.isArray(s.cpu_sensors) ? s.cpu_sensors : [];
   const gpuDevices = Array.isArray(s.gpu_devices) ? s.gpu_devices : [];
   const configuredDevice = selection.gpu_device || 'auto';
   const sensorIdentity = (sensors) => (Array.isArray(sensors) ? sensors : []).map(sensor => ({
@@ -461,7 +567,6 @@ function renderTemperatureBaseline(s) {
     name: sensor.name
   }));
   const signature = JSON.stringify({
-    cpuSensors: sensorIdentity(cpuSensors),
     gpuDevices: gpuDevices.map(device => ({
       key: device.key,
       name: device.name,
@@ -475,37 +580,52 @@ function renderTemperatureBaseline(s) {
   if (signature === temperatureMetadataSignature) return;
   temperatureMetadataSignature = signature;
 
-  const cpuSelect = $('cpu-sensors');
-  const selectedCpu = Array.isArray(selection.cpu_sensors) ? selection.cpu_sensors : [];
-  const cpuOptions = cpuSensors.length
-    ? [{ value: '', label: '自动选择（推荐）', disabled: selectedCpu.length > 0 }, ...cpuSensors.map(sensor => ({
-        value: sensor.key,
-        label: `${sensor.name} (${sensor.value}°C)`
-      }))]
-    : [{ value: '', label: '等待传感器...', disabled: true }];
-  replaceOptions(cpuSelect, cpuOptions, selectedCpu.length ? selectedCpu : ['']);
-  cpuSelect.disabled = cpuSensors.length === 0;
-  cpuSelect.size = Math.min(4, Math.max(2, cpuOptions.length));
-
-  replaceOptions($('gpu-device'), [
+  const deviceOptions = [
     { value: 'auto', label: '自动选择（推荐）' },
     ...gpuDevices.map(device => ({
       value: device.key,
       label: `${device.vendor ? `${device.vendor.toUpperCase()} · ` : ''}${device.name}`
     }))
-  ], configuredDevice);
-  $('gpu-device').disabled = gpuDevices.length === 0;
+  ];
+  const automaticallySelectedDevice = gpuDevices.find(device => device.key === (s.selected_gpu_device || ''));
+  const automaticDeviceLabel = automaticallySelectedDevice
+    ? `${automaticallySelectedDevice.vendor ? `${automaticallySelectedDevice.vendor.toUpperCase()} · ` : ''}${automaticallySelectedDevice.name}`
+    : (s.gpu_model || '');
+  renderSingleSelect(
+    'gpu-device-menu',
+    'gpu-device-summary',
+    'gpu-device-options',
+    deviceOptions,
+    configuredDevice,
+    gpuDevices.length > 0,
+    '等待设备...',
+    automaticDeviceLabel
+  );
 
   const activeDeviceKey = configuredDevice === 'auto' ? (s.selected_gpu_device || 'auto') : configuredDevice;
   const activeDevice = gpuDevices.find(device => device.key === activeDeviceKey);
   const gpuSensors = activeDevice && Array.isArray(activeDevice.sensors) && activeDevice.sensors.length
     ? activeDevice.sensors
     : (Array.isArray(s.gpu_sensors) ? s.gpu_sensors : []);
-  replaceOptions($('gpu-sensor'), [
+  const sensorOptions = [
     { value: 'auto', label: '自动选择（推荐）' },
     ...gpuSensors.map(sensor => ({ value: sensor.key, label: `${sensor.name} (${sensor.value}°C)` }))
-  ], selection.gpu_sensor || 'auto');
-  $('gpu-sensor').disabled = gpuSensors.length === 0;
+  ];
+  const preferredSensorNames = ['Average', 'GPU Core', 'Core', 'Edge', 'Junction', 'Hot Spot', 'Temperature'];
+  const automaticallySelectedSensor = gpuSensors.find(sensor => {
+    const name = String(sensor.name || '').toLowerCase();
+    return preferredSensorNames.some(keyword => name.includes(keyword.toLowerCase()));
+  }) || gpuSensors[0];
+  renderSingleSelect(
+    'gpu-sensor-menu',
+    'gpu-sensor-summary',
+    'gpu-sensor-options',
+    sensorOptions,
+    selection.gpu_sensor || 'auto',
+    gpuSensors.length > 0,
+    '等待传感器...',
+    automaticallySelectedSensor ? automaticallySelectedSensor.name : ''
+  );
 }
 
 async function saveTemperatureSelection(patch) {
@@ -648,15 +768,42 @@ $('save').addEventListener('click', saveConfig);
 $('reconnect').addEventListener('click', () => postJson('/api/reconnect'));
 $('reset-defaults').addEventListener('click', resetDefaults);
 $('reset-learning').addEventListener('click', resetLearning);
-$('cpu-sensors').addEventListener('change', (event) => {
-  const values = Array.from(event.currentTarget.selectedOptions).map(option => option.value).filter(Boolean);
-  saveTemperatureSelection({ cpu_sensors: values });
+function bindTemperatureSelect(optionsId, menuId, onSelect) {
+  $(optionsId).addEventListener('change', (event) => {
+    const input = event.target;
+    if (!(input instanceof HTMLInputElement) || input.type !== 'radio') return;
+    $(menuId).open = false;
+    onSelect(input.value);
+  });
+  $(menuId).querySelector('summary').addEventListener('click', (event) => {
+    if ($(menuId).classList.contains('is-disabled')) event.preventDefault();
+  });
+}
+bindTemperatureSelect('gpu-device-options', 'gpu-device-menu', (value) => {
+  saveTemperatureSelection({ gpu_device: value, gpu_sensor: 'auto' });
 });
-$('gpu-device').addEventListener('change', (event) => {
-  saveTemperatureSelection({ gpu_device: event.currentTarget.value, gpu_sensor: 'auto' });
+bindTemperatureSelect('gpu-sensor-options', 'gpu-sensor-menu', (value) => {
+  saveTemperatureSelection({ gpu_sensor: value });
 });
-$('gpu-sensor').addEventListener('change', (event) => {
-  saveTemperatureSelection({ gpu_sensor: event.currentTarget.value });
+
+function setAdvancedOpen(open) {
+  $('advanced-backdrop').hidden = !open;
+  document.body.classList.toggle('modal-open', open);
+  if (open) $('advanced-close').focus();
+  else $('advanced-open').focus();
+}
+$('advanced-open').addEventListener('click', () => setAdvancedOpen(true));
+$('advanced-close').addEventListener('click', () => setAdvancedOpen(false));
+$('advanced-backdrop').addEventListener('click', (event) => {
+  if (event.target === event.currentTarget) setAdvancedOpen(false);
+});
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && !$('advanced-backdrop').hidden) setAdvancedOpen(false);
+});
+document.addEventListener('click', (event) => {
+  document.querySelectorAll('.multi-select[open]').forEach(menu => {
+    if (!menu.contains(event.target)) menu.open = false;
+  });
 });
 
 loadConfig();
