@@ -119,7 +119,6 @@ INDEX_HTML = r"""<!doctype html>
     <header>
       <div>
         <h1>BS1 Controller</h1>
-        <p>BS1 蓝牙自动控温 · Web 端口 1919</p>
       </div>
       <button id="reconnect" type="button">重新连接</button>
     </header>
