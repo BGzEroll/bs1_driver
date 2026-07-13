@@ -4,8 +4,3 @@ __pycache__/
 /build/
 /dist/
 /BS1Controller.spec
-
-/helpers/bin/
-/helpers/obj/
-/helpers/publish/
-
