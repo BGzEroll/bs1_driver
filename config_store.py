@@ -9,7 +9,6 @@ from defaults import (
     CONFIG_NAME,
     DEFAULT_FAN_CURVE,
     DEFAULT_SMART_CONTROL,
-    DEFAULT_TEMPERATURE_SELECTION,
     WEB_PORT,
     default_config,
 )
@@ -65,13 +64,6 @@ def normalize_config(cfg: dict[str, Any]) -> dict:
     out["web_port"] = WEB_PORT
     out["temp_update_rate"] = clamp_int(out.get("temp_update_rate"), 1, 10, 2)
     out["temp_source"] = "max"
-    selection = dict(DEFAULT_TEMPERATURE_SELECTION)
-    if isinstance(out.get("temperature_selection"), dict):
-        selection.update(out["temperature_selection"])
-    selection["gpu_device"] = normalize_selection_key(selection.get("gpu_device"))
-    selection["gpu_sensor"] = normalize_selection_key(selection.get("gpu_sensor"))
-    selection["cpu_sensors"] = normalize_sensor_keys(selection.get("cpu_sensors"))
-    out["temperature_selection"] = selection
     out["autostart"] = bool(out.get("autostart"))
     out["fan_curve"] = [dict(point) for point in DEFAULT_FAN_CURVE]
     smart = dict(DEFAULT_SMART_CONTROL)
@@ -176,19 +168,3 @@ def clamp_int(value: Any, low: int, high: int, fallback: int | None) -> int | No
     except (TypeError, ValueError):
         return fallback
     return max(low, min(high, n))
-
-
-def normalize_selection_key(value: Any) -> str:
-    key = str(value or "auto").strip()
-    return key[:512] if key else "auto"
-
-
-def normalize_sensor_keys(value: Any) -> list[str]:
-    if not isinstance(value, list):
-        return []
-    keys = []
-    for item in value[:32]:
-        key = str(item or "").strip()[:512]
-        if key and key not in keys:
-            keys.append(key)
-    return keys

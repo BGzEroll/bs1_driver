@@ -47,7 +47,7 @@ class Controller:
             if not self.ble.is_connected() and time.monotonic() >= self.reconnect_after:
                 self.try_connect()
 
-            sample = self.temp_reader.read(cfg.get("temperature_selection"))
+            sample = self.temp_reader.read()
             self.state.update(
                 cpu_temp=sample.cpu_temp,
                 gpu_temp=sample.gpu_temp,
@@ -57,19 +57,19 @@ class Controller:
                 control_source=sample.control_source,
                 cpu_model=sample.cpu_model,
                 gpu_model=sample.gpu_model,
-                selected_gpu_device=sample.selected_gpu_device,
-                cpu_sensors=sample.cpu_sensors,
-                gpu_sensors=sample.gpu_sensors,
-                gpu_devices=sample.gpu_devices,
-                bridge_ok=sample.bridge_ok,
-                bridge_error=sample.bridge_error,
+                cpu_temp_source=sample.cpu_temp_source,
+                gpu_temp_source=sample.gpu_temp_source,
+                temperature_ok=sample.temperature_ok,
+                temperature_error=sample.temperature_error,
                 heartbeat_age=round(time.monotonic() - self.ble.last_heartbeat_at, 1)
                 if self.ble.last_heartbeat_at
                 else 0,
             )
             if sample.error:
                 self.state.set_error(sample.error)
-            elif str(self.state.snapshot().get("last_error") or "").startswith("CPU temperature unavailable"):
+            elif str(self.state.snapshot().get("last_error") or "").startswith(
+                ("CPU temperature unavailable", "GPU temperature unavailable")
+            ):
                 self.state.clear_error()
 
             if self.ble.is_connected() and sample.control_temp > 0:
@@ -96,7 +96,8 @@ class Controller:
                     try:
                         if self.ble.set_target_rpm(result.target_rpm):
                             self.state.update(last_sent_rpm=result.target_rpm)
-                            self.state.clear_error()
+                            if not sample.error:
+                                self.state.clear_error()
                     except Exception as exc:
                         try:
                             self.ble.disconnect(timeout=2)
@@ -182,12 +183,6 @@ class Controller:
                 next_cfg["smart_control"] = smart
             if "temp_update_rate" in patch:
                 next_cfg["temp_update_rate"] = patch["temp_update_rate"]
-            if "temperature_selection" in patch and isinstance(patch["temperature_selection"], dict):
-                selection = dict(next_cfg.get("temperature_selection", {}))
-                for key in ("gpu_device", "cpu_sensors", "gpu_sensor"):
-                    if key in patch["temperature_selection"]:
-                        selection[key] = patch["temperature_selection"][key]
-                next_cfg["temperature_selection"] = selection
             if "autostart" in patch:
                 next_cfg["autostart"] = bool(patch["autostart"])
             self.config = normalize_config(next_cfg)

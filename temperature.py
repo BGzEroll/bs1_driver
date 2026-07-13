@@ -1,310 +1,372 @@
 from __future__ import annotations
 
-import json
-import queue
-import shutil
-import subprocess
+import ctypes
+import os
 import sys
 import threading
-from dataclasses import dataclass, field
+import time
+from ctypes import wintypes
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+
+
+PDH_FMT_DOUBLE = 0x00000200
+NVML_SUCCESS = 0
+NVML_TEMPERATURE_GPU = 0
+
+
+class _PdhValueUnion(ctypes.Union):
+    _fields_ = [
+        ("long_value", ctypes.c_long),
+        ("double_value", ctypes.c_double),
+        ("large_value", ctypes.c_longlong),
+        ("ansi_string_value", ctypes.c_char_p),
+        ("wide_string_value", ctypes.c_wchar_p),
+    ]
+
+
+class _PdhFormattedCounterValue(ctypes.Structure):
+    _anonymous_ = ("value",)
+    _fields_ = [
+        ("c_status", wintypes.DWORD),
+        ("value", _PdhValueUnion),
+    ]
 
 
 @dataclass
 class TemperatureSample:
-    cpu_temp: int
-    gpu_temp: int
-    cpu_power: float
-    gpu_power: float
-    control_temp: int
+    cpu_temp: int = 0
+    gpu_temp: int = 0
+    cpu_power: float = 0.0
+    gpu_power: float = 0.0
+    control_temp: int = 0
     control_source: str = "max"
     cpu_model: str = ""
     gpu_model: str = ""
-    selected_gpu_device: str = "auto"
-    cpu_sensors: list[dict[str, Any]] = field(default_factory=list)
-    gpu_sensors: list[dict[str, Any]] = field(default_factory=list)
-    gpu_devices: list[dict[str, Any]] = field(default_factory=list)
-    bridge_ok: bool = False
-    bridge_error: str = ""
+    cpu_temp_source: str = ""
+    gpu_temp_source: str = ""
+    temperature_ok: bool = False
+    temperature_error: str = ""
     error: str = ""
+
+
+class PdhThermalZoneReader:
+    COUNTER_PATHS = (
+        r"\Thermal Zone Information(\_TZ.THRM)\Temperature",
+        r"\Thermal Zone Information(_TZ.THRM)\Temperature",
+        r"\Thermal Zone Information(THRM)\Temperature",
+    )
+    RETRY_SECONDS = 30.0
+
+    def __init__(self) -> None:
+        self._pdh = ctypes.WinDLL("pdh.dll")
+        self._query = ctypes.c_void_p()
+        self._counter = ctypes.c_void_p()
+        self._counter_path = ""
+        self._retry_after = 0.0
+        self.last_error = ""
+        self._configure_api()
+
+    @property
+    def source_name(self) -> str:
+        return "Windows PDH Thermal Zone"
+
+    def read(self) -> int:
+        if not self._query.value:
+            if time.monotonic() < self._retry_after:
+                return 0
+            try:
+                self._open()
+            except Exception as exc:
+                self.last_error = str(exc)
+                self._retry_after = time.monotonic() + self.RETRY_SECONDS
+                return 0
+
+        try:
+            raw = self._collect_value()
+            temp = normalize_thermal_zone_temperature(raw)
+            if temp <= 0:
+                raise RuntimeError(f"PDH returned invalid Thermal Zone value: {raw}")
+            self.last_error = ""
+            return temp
+        except Exception as exc:
+            self.last_error = str(exc)
+            self.close()
+            self._retry_after = time.monotonic() + self.RETRY_SECONDS
+            return 0
+
+    def close(self) -> None:
+        if self._query.value:
+            self._pdh.PdhCloseQuery(self._query)
+        self._query = ctypes.c_void_p()
+        self._counter = ctypes.c_void_p()
+        self._counter_path = ""
+
+    def _configure_api(self) -> None:
+        self._pdh.PdhOpenQueryW.argtypes = [ctypes.c_wchar_p, ctypes.c_size_t, ctypes.POINTER(ctypes.c_void_p)]
+        self._pdh.PdhOpenQueryW.restype = wintypes.LONG
+        self._pdh.PdhAddEnglishCounterW.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_wchar_p,
+            ctypes.c_size_t,
+            ctypes.POINTER(ctypes.c_void_p),
+        ]
+        self._pdh.PdhAddEnglishCounterW.restype = wintypes.LONG
+        self._pdh.PdhCollectQueryData.argtypes = [ctypes.c_void_p]
+        self._pdh.PdhCollectQueryData.restype = wintypes.LONG
+        self._pdh.PdhGetFormattedCounterValue.argtypes = [
+            ctypes.c_void_p,
+            wintypes.DWORD,
+            ctypes.POINTER(wintypes.DWORD),
+            ctypes.POINTER(_PdhFormattedCounterValue),
+        ]
+        self._pdh.PdhGetFormattedCounterValue.restype = wintypes.LONG
+        self._pdh.PdhCloseQuery.argtypes = [ctypes.c_void_p]
+        self._pdh.PdhCloseQuery.restype = wintypes.LONG
+
+    def _open(self) -> None:
+        errors = []
+        for path in self.COUNTER_PATHS:
+            query = ctypes.c_void_p()
+            counter = ctypes.c_void_p()
+            status = self._pdh.PdhOpenQueryW(None, 0, ctypes.byref(query))
+            if status != 0:
+                errors.append(f"PdhOpenQueryW=0x{status & 0xFFFFFFFF:08X}")
+                continue
+            status = self._pdh.PdhAddEnglishCounterW(query, path, 0, ctypes.byref(counter))
+            if status == 0:
+                self._query = query
+                self._counter = counter
+                self._counter_path = path
+                try:
+                    if normalize_thermal_zone_temperature(self._collect_value()) > 0:
+                        return
+                except Exception as exc:
+                    errors.append(f"{path}: {exc}")
+                self.close()
+                continue
+            self._pdh.PdhCloseQuery(query)
+            errors.append(f"{path}: PdhAddEnglishCounterW=0x{status & 0xFFFFFFFF:08X}")
+        raise RuntimeError("Thermal Zone counter unavailable" + (f" ({'; '.join(errors)})" if errors else ""))
+
+    def _collect_value(self) -> float:
+        status = self._pdh.PdhCollectQueryData(self._query)
+        if status != 0:
+            raise RuntimeError(f"PdhCollectQueryData=0x{status & 0xFFFFFFFF:08X}")
+        value = _PdhFormattedCounterValue()
+        counter_type = wintypes.DWORD()
+        status = self._pdh.PdhGetFormattedCounterValue(
+            self._counter,
+            PDH_FMT_DOUBLE,
+            ctypes.byref(counter_type),
+            ctypes.byref(value),
+        )
+        if status != 0 or value.c_status != 0:
+            raise RuntimeError(
+                f"PdhGetFormattedCounterValue=0x{status & 0xFFFFFFFF:08X}, "
+                f"CStatus=0x{value.c_status:08X}"
+            )
+        return float(value.double_value)
+
+
+class NvidiaNvmlReader:
+    RETRY_SECONDS = 10.0
+
+    def __init__(self) -> None:
+        self._lock = threading.RLock()
+        self._nvml: ctypes.WinDLL | None = None
+        self._device = ctypes.c_void_p()
+        self._initialized = False
+        self._retry_after = 0.0
+        self.model = ""
+        self.last_error = ""
+
+    @property
+    def source_name(self) -> str:
+        return "NVIDIA NVML GPU Core"
+
+    def read(self) -> tuple[int, float, str]:
+        with self._lock:
+            if not self._initialized:
+                if time.monotonic() < self._retry_after:
+                    return 0, 0.0, self.model
+                try:
+                    self._initialize()
+                except Exception as exc:
+                    self.last_error = str(exc)
+                    self._retry_after = time.monotonic() + self.RETRY_SECONDS
+                    return 0, 0.0, self.model
+
+            try:
+                temperature = ctypes.c_uint()
+                self._check(
+                    self._nvml.nvmlDeviceGetTemperature(
+                        self._device,
+                        NVML_TEMPERATURE_GPU,
+                        ctypes.byref(temperature),
+                    ),
+                    "nvmlDeviceGetTemperature",
+                )
+                power = ctypes.c_uint()
+                power_status = self._nvml.nvmlDeviceGetPowerUsage(self._device, ctypes.byref(power))
+                watts = power.value / 1000.0 if power_status == NVML_SUCCESS else 0.0
+                temp = int(temperature.value)
+                if not 0 < temp < 150:
+                    raise RuntimeError(f"NVML returned invalid GPU temperature: {temp}")
+                self.last_error = ""
+                return temp, watts, self.model
+            except Exception as exc:
+                self.last_error = str(exc)
+                self.close()
+                self._retry_after = time.monotonic() + self.RETRY_SECONDS
+                return 0, 0.0, self.model
+
+    def close(self) -> None:
+        with self._lock:
+            if self._initialized and self._nvml is not None:
+                try:
+                    self._nvml.nvmlShutdown()
+                except Exception:
+                    pass
+            self._initialized = False
+            self._device = ctypes.c_void_p()
+            self._nvml = None
+
+    def _initialize(self) -> None:
+        nvml = load_nvml_library()
+        configure_nvml_api(nvml)
+        self._check_with(nvml, nvml.nvmlInit_v2(), "nvmlInit_v2")
+        self._nvml = nvml
+        self._initialized = True
+        try:
+            count = ctypes.c_uint()
+            self._check(nvml.nvmlDeviceGetCount_v2(ctypes.byref(count)), "nvmlDeviceGetCount_v2")
+            if count.value < 1:
+                raise RuntimeError("NVML found no NVIDIA GPU")
+            self._check(
+                nvml.nvmlDeviceGetHandleByIndex_v2(0, ctypes.byref(self._device)),
+                "nvmlDeviceGetHandleByIndex_v2",
+            )
+            name = ctypes.create_string_buffer(96)
+            self._check(nvml.nvmlDeviceGetName(self._device, name, len(name)), "nvmlDeviceGetName")
+            self.model = name.value.decode("utf-8", errors="replace").strip()
+        except Exception:
+            self.close()
+            raise
+
+    def _check(self, status: int, operation: str) -> None:
+        assert self._nvml is not None
+        self._check_with(self._nvml, status, operation)
+
+    @staticmethod
+    def _check_with(nvml: ctypes.WinDLL, status: int, operation: str) -> None:
+        if status == NVML_SUCCESS:
+            return
+        try:
+            detail = nvml.nvmlErrorString(status)
+            message = detail.decode("utf-8", errors="replace") if detail else f"status {status}"
+        except Exception:
+            message = f"status {status}"
+        raise RuntimeError(f"{operation} failed: {message}")
 
 
 class TemperatureReader:
     def __init__(self) -> None:
-        self._nvidia_smi = shutil.which("nvidia-smi")
-        self._bridge_path = find_bridge_path()
-        self._bridge: subprocess.Popen[str] | None = None
-        self._bridge_lines: queue.Queue[str] = queue.Queue()
-        self._bridge_lock = threading.RLock()
+        self._cpu = PdhThermalZoneReader()
+        self._gpu = NvidiaNvmlReader()
+        self._cpu_model = read_cpu_model()
 
-    def read(self, selection: dict[str, Any] | None = None) -> TemperatureSample:
-        selection = selection if isinstance(selection, dict) else {}
-        bridge_error = ""
-        try:
-            data = self._read_bridge(selection)
-        except Exception as exc:
-            data = {}
-            bridge_error = str(exc)
-
-        cpu_sensors = normalize_sensors(data.get("CpuSensors"))
-        gpu_sensors = normalize_sensors(data.get("GpuSensors"))
-        gpu_devices = normalize_gpu_devices(data.get("GpuDevices"))
-        cpu = select_cpu_temperature(cpu_sensors, selection.get("cpu_sensors"), parse_int(data.get("CpuTemp")))
-        gpu = parse_int(data.get("GpuTemp"))
-        cpu_power = parse_float(data.get("CpuPower"))
-        power = parse_float(data.get("GpuPower"))
-        if gpu <= 0:
-            gpu, power = self.read_gpu_temp_power()
-
-        cpu = cpu if 0 < cpu < 150 else 0
-        gpu = gpu if 0 < gpu < 150 else 0
-        cpu_power = cpu_power if 0 <= cpu_power <= 2000 else 0.0
-        power = power if 0 <= power <= 2000 else 0.0
+    def read(self) -> TemperatureSample:
+        cpu = self._cpu.read()
+        gpu, gpu_power, gpu_model = self._gpu.read()
         control = max(cpu, gpu)
-        error = ""
+        errors = []
         if cpu <= 0:
-            error = "CPU temperature unavailable"
-            if bridge_error:
-                error += f": {bridge_error}"
-        elif control <= 0:
-            error = "CPU/GPU temperature unavailable"
+            errors.append(f"CPU temperature unavailable: {self._cpu.last_error or 'PDH Thermal Zone unavailable'}")
+        if gpu <= 0:
+            errors.append(f"GPU temperature unavailable: {self._gpu.last_error or 'NVIDIA NVML unavailable'}")
+        error = "; ".join(errors)
         return TemperatureSample(
             cpu_temp=cpu,
             gpu_temp=gpu,
-            cpu_power=cpu_power,
-            gpu_power=power,
+            cpu_power=0.0,
+            gpu_power=gpu_power if 0 <= gpu_power <= 2000 else 0.0,
             control_temp=control,
-            cpu_model=str(data.get("CpuModel") or ""),
-            gpu_model=str(data.get("GpuModel") or ""),
-            selected_gpu_device=str(data.get("SelectedGpuDevice") or "auto"),
-            cpu_sensors=cpu_sensors,
-            gpu_sensors=gpu_sensors,
-            gpu_devices=gpu_devices,
-            bridge_ok=bool(data),
-            bridge_error=bridge_error,
+            cpu_model=self._cpu_model,
+            gpu_model=gpu_model,
+            cpu_temp_source=self._cpu.source_name,
+            gpu_temp_source=self._gpu.source_name,
+            temperature_ok=cpu > 0 and gpu > 0,
+            temperature_error=error,
             error=error,
         )
 
     def close(self) -> None:
-        with self._bridge_lock:
-            process = self._bridge
-            self._bridge = None
-            if process is None:
-                return
-            try:
-                if process.poll() is None and process.stdin:
-                    process.stdin.write(json.dumps({"Type": "Exit", "Data": ""}) + "\n")
-                    process.stdin.flush()
-                    process.wait(timeout=2)
-            except Exception:
-                try:
-                    process.terminate()
-                except Exception:
-                    pass
-
-    def read_gpu_temp_power(self) -> tuple[int, float]:
-        if not self._nvidia_smi:
-            self._nvidia_smi = shutil.which("nvidia-smi")
-        if not self._nvidia_smi:
-            return 0, 0.0
-        try:
-            output = run_hidden(
-                [
-                    self._nvidia_smi,
-                    "--query-gpu=temperature.gpu,power.draw",
-                    "--format=csv,noheader,nounits",
-                ],
-                timeout=1.5,
-            )
-        except Exception:
-            return 0, 0.0
-        line = output.strip().splitlines()[0] if output.strip() else ""
-        parts = [part.strip() for part in line.split(",")]
-        temp = parse_int(parts[0]) if parts else 0
-        power = parse_float(parts[1]) if len(parts) > 1 else 0.0
-        return (temp if 0 < temp < 150 else 0), (power if 0 <= power <= 2000 else 0.0)
-
-    def _read_bridge(self, selection: dict[str, Any]) -> dict[str, Any]:
-        command = {
-            "Type": "GetTemperature",
-            "Data": json.dumps(
-                {
-                    "TempSource": "max",
-                    "GpuDevice": clean_selection(selection.get("gpu_device")),
-                    "CpuSensor": "auto",
-                    "GpuSensor": clean_selection(selection.get("gpu_sensor")),
-                }
-            ),
-        }
-        last_error: Exception | None = None
-        for _attempt in range(2):
-            try:
-                with self._bridge_lock:
-                    self._ensure_bridge()
-                    assert self._bridge is not None and self._bridge.stdin is not None
-                    self._bridge.stdin.write(json.dumps(command) + "\n")
-                    self._bridge.stdin.flush()
-                    response = json.loads(self._bridge_lines.get(timeout=6))
-                    data = response.get("Data")
-                    if not response.get("Success") or not isinstance(data, dict):
-                        raise RuntimeError(str(response.get("Error") or "TempBridge read failed"))
-                    return data
-            except Exception as exc:
-                last_error = exc
-                self._stop_bridge()
-        raise RuntimeError(str(last_error or "TempBridge unavailable"))
-
-    def _ensure_bridge(self) -> None:
-        if self._bridge is not None and self._bridge.poll() is None:
-            return
-        if self._bridge_path is None:
-            raise FileNotFoundError("BS1TempBridge.exe is not packaged")
-
-        self._bridge_lines = queue.Queue()
-        startupinfo = None
-        creationflags = 0
-        if sys.platform == "win32":
-            startupinfo = subprocess.STARTUPINFO()
-            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-            creationflags = subprocess.CREATE_NO_WINDOW
-        self._bridge = subprocess.Popen(
-            [str(self._bridge_path)],
-            cwd=str(self._bridge_path.parent),
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            bufsize=1,
-            startupinfo=startupinfo,
-            creationflags=creationflags,
-        )
-        threading.Thread(target=self._collect_bridge_output, name="temp-bridge-output", daemon=True).start()
-        ready = self._bridge_lines.get(timeout=30)
-        if ready != "READY:STDIO":
-            raise RuntimeError(f"unexpected TempBridge startup response: {ready}")
-
-    def _collect_bridge_output(self) -> None:
-        process = self._bridge
-        if process is None or process.stdout is None:
-            return
-        try:
-            for line in process.stdout:
-                stripped = line.strip()
-                if stripped:
-                    self._bridge_lines.put(stripped)
-        except Exception:
-            return
-
-    def _stop_bridge(self) -> None:
-        process = self._bridge
-        self._bridge = None
-        if process is None:
-            return
-        try:
-            if process.poll() is None:
-                process.terminate()
-                process.wait(timeout=2)
-        except Exception:
-            try:
-                process.kill()
-            except Exception:
-                pass
+        self._cpu.close()
+        self._gpu.close()
 
 
-def find_bridge_path() -> Path | None:
-    roots = []
-    bundle_root = getattr(sys, "_MEIPASS", None)
-    if bundle_root:
-        roots.append(Path(bundle_root))
-    roots.append(Path(__file__).resolve().parent)
-    for root in roots:
-        for relative in (Path("helpers/BS1TempBridge.exe"), Path("helpers/publish/BS1TempBridge.exe")):
-            candidate = root / relative
-            if candidate.is_file():
-                return candidate
-    return None
-
-
-def select_cpu_temperature(sensors: list[dict[str, Any]], selected: Any, fallback: int) -> int:
-    keys = {str(key) for key in selected} if isinstance(selected, list) else set()
-    values = [sensor["value"] for sensor in sensors if sensor["key"] in keys and sensor["value"] > 0]
-    if values:
-        return int(round(sum(values) / len(values)))
-    return fallback
-
-
-def normalize_sensors(value: Any) -> list[dict[str, Any]]:
-    if not isinstance(value, list):
-        return []
-    sensors = []
-    for item in value:
-        if not isinstance(item, dict):
-            continue
-        key = str(item.get("Key") or "").strip()
-        name = str(item.get("Name") or key).strip()
-        temp = parse_int(item.get("Value"))
-        if key and 0 < temp < 150:
-            sensors.append({"key": key, "name": name, "value": temp})
-    return sensors
-
-
-def normalize_gpu_devices(value: Any) -> list[dict[str, Any]]:
-    if not isinstance(value, list):
-        return []
-    devices = []
-    for item in value:
-        if not isinstance(item, dict):
-            continue
-        key = str(item.get("Key") or "").strip()
-        if not key:
-            continue
-        devices.append(
-            {
-                "key": key,
-                "name": str(item.get("Name") or key).strip(),
-                "vendor": str(item.get("Vendor") or "").strip(),
-                "sensors": normalize_sensors(item.get("Sensors")),
-            }
-        )
-    return devices
-
-
-def clean_selection(value: Any) -> str:
-    text = str(value or "auto").strip()
-    return text if text else "auto"
-
-
-def run_hidden(args: list[str], timeout: float) -> str:
-    startupinfo = None
-    creationflags = 0
-    if sys.platform == "win32":
-        startupinfo = subprocess.STARTUPINFO()
-        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-        creationflags = subprocess.CREATE_NO_WINDOW
-    completed = subprocess.run(
-        args,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-        text=True,
-        timeout=timeout,
-        startupinfo=startupinfo,
-        creationflags=creationflags,
-    )
-    return completed.stdout
-
-
-def parse_int(value: Any) -> int:
-    try:
-        return int(round(float(value)))
-    except (TypeError, ValueError):
+def normalize_thermal_zone_temperature(raw: float) -> int:
+    if raw <= 0:
         return 0
+    celsius = raw
+    if raw > 1000:
+        celsius = (raw / 10.0) - 273.15
+    elif raw > 200:
+        celsius = raw - 273.15
+    rounded = int(round(celsius))
+    return rounded if 0 < rounded < 150 else 0
 
 
-def parse_float(value: Any) -> float:
+def load_nvml_library() -> ctypes.WinDLL:
+    candidates = []
+    windir = os.environ.get("WINDIR")
+    if windir:
+        candidates.append(Path(windir) / "System32" / "nvml.dll")
+    for env_name in ("ProgramW6432", "ProgramFiles"):
+        root = os.environ.get(env_name)
+        if root:
+            candidates.append(Path(root) / "NVIDIA Corporation" / "NVSMI" / "nvml.dll")
+    for candidate in candidates:
+        if candidate.is_file():
+            return ctypes.WinDLL(str(candidate))
     try:
-        return float(value)
-    except (TypeError, ValueError):
-        return 0.0
+        return ctypes.WinDLL("nvml.dll")
+    except OSError as exc:
+        raise FileNotFoundError("NVIDIA NVML library nvml.dll was not found") from exc
+
+
+def configure_nvml_api(nvml: ctypes.WinDLL) -> None:
+    nvml.nvmlInit_v2.argtypes = []
+    nvml.nvmlInit_v2.restype = ctypes.c_uint
+    nvml.nvmlShutdown.argtypes = []
+    nvml.nvmlShutdown.restype = ctypes.c_uint
+    nvml.nvmlDeviceGetCount_v2.argtypes = [ctypes.POINTER(ctypes.c_uint)]
+    nvml.nvmlDeviceGetCount_v2.restype = ctypes.c_uint
+    nvml.nvmlDeviceGetHandleByIndex_v2.argtypes = [ctypes.c_uint, ctypes.POINTER(ctypes.c_void_p)]
+    nvml.nvmlDeviceGetHandleByIndex_v2.restype = ctypes.c_uint
+    nvml.nvmlDeviceGetName.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_char), ctypes.c_uint]
+    nvml.nvmlDeviceGetName.restype = ctypes.c_uint
+    nvml.nvmlDeviceGetTemperature.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_uint,
+        ctypes.POINTER(ctypes.c_uint),
+    ]
+    nvml.nvmlDeviceGetTemperature.restype = ctypes.c_uint
+    nvml.nvmlDeviceGetPowerUsage.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint)]
+    nvml.nvmlDeviceGetPowerUsage.restype = ctypes.c_uint
+    nvml.nvmlErrorString.argtypes = [ctypes.c_uint]
+    nvml.nvmlErrorString.restype = ctypes.c_char_p
+
+
+def read_cpu_model() -> str:
+    if sys.platform != "win32":
+        return ""
+    try:
+        import winreg
+
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"HARDWARE\DESCRIPTION\System\CentralProcessor\0") as key:
+            value, _ = winreg.QueryValueEx(key, "ProcessorNameString")
+            return str(value).strip()
+    except OSError:
+        return ""
