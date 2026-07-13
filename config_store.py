@@ -59,15 +59,14 @@ def normalize_config(cfg: dict[str, Any]) -> dict:
     out["temp_update_rate"] = clamp_int(out.get("temp_update_rate"), 1, 10, 2)
     out["temp_source"] = "max"
     out["autostart"] = bool(out.get("autostart"))
-    out["fan_curve"] = normalize_curve(out.get("fan_curve"))
+    out["fan_curve"] = [dict(point) for point in DEFAULT_FAN_CURVE]
     smart = dict(DEFAULT_SMART_CONTROL)
     if isinstance(out.get("smart_control"), dict):
         smart.update(out["smart_control"])
     smart["learning"] = bool(smart.get("learning"))
     smart["predictive_boost"] = bool(smart.get("predictive_boost"))
     smart["filter_transient_spike"] = bool(smart.get("filter_transient_spike"))
-    if smart.get("learning_bias") not in {"balanced", "cooling", "quiet"}:
-        smart["learning_bias"] = "balanced"
+    smart["learning_bias"] = "balanced"
     smart["target_temp"] = clamp_int(smart.get("target_temp"), 45, 90, 68)
     smart["aggressiveness"] = clamp_int(smart.get("aggressiveness"), 1, 10, 5)
     smart["hysteresis"] = clamp_int(smart.get("hysteresis"), 0, 8, 2)
@@ -130,4 +129,3 @@ def clamp_int(value: Any, low: int, high: int, fallback: int | None) -> int | No
     except (TypeError, ValueError):
         return fallback
     return max(low, min(high, n))
-

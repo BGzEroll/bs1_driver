@@ -66,6 +66,9 @@ class WebServer:
                     elif path == "/api/reset-learning":
                         cfg = controller.reset_learning()
                         self.send_json(cfg)
+                    elif path == "/api/reset-defaults":
+                        cfg = controller.reset_defaults()
+                        self.send_json(cfg)
                     elif path == "/api/reconnect":
                         threading.Thread(target=controller.reconnect, daemon=True).start()
                         self.send_json({"ok": True})
@@ -116,9 +119,9 @@ INDEX_HTML = r"""<!doctype html>
     <header>
       <div>
         <h1>BS1 Controller</h1>
-        <p>BLE 自动控温 · Web 端口 1919</p>
+        <p>BS1 蓝牙自动控温 · Web 端口 1919</p>
       </div>
-      <button id="reconnect">重新连接</button>
+      <button id="reconnect" type="button">重新连接</button>
     </header>
 
     <section class="status-grid">
@@ -133,37 +136,38 @@ INDEX_HTML = r"""<!doctype html>
     <section class="panel">
       <div class="panel-title">
         <h2>智能控温</h2>
-        <button id="save">保存配置</button>
+        <div class="actions">
+          <button id="save" type="button">保存配置</button>
+          <button id="reset-defaults" class="secondary" type="button">恢复默认配置</button>
+        </div>
       </div>
       <div class="form-grid">
         <label>目标温度 <input id="target-temp" type="number" min="45" max="90" /></label>
         <label>最小 RPM 变化 <input id="min-rpm-change" type="number" min="20" max="400" /></label>
         <label>升速限幅 <input id="ramp-up" type="number" min="50" max="1200" /></label>
         <label>降速限幅 <input id="ramp-down" type="number" min="50" max="1200" /></label>
-        <label>学习速率 <input id="learn-rate" type="number" min="1" max="10" /></label>
-        <label>学习窗口 <input id="learn-window" type="number" min="3" max="24" /></label>
-        <label>学习延迟 <input id="learn-delay" type="number" min="0" max="8" /></label>
-        <label>滞回温差 <input id="hysteresis" type="number" min="0" max="8" /></label>
       </div>
       <div class="toggles">
         <label><input id="learning" type="checkbox" /> 自动学习</label>
         <label><input id="spike-filter" type="checkbox" /> 温度尖峰过滤</label>
         <label><input id="predictive" type="checkbox" /> 预测前馈</label>
-        <select id="learning-bias">
-          <option value="balanced">均衡</option>
-          <option value="cooling">偏散热</option>
-          <option value="quiet">偏安静</option>
-        </select>
       </div>
     </section>
 
     <section class="panel">
       <div class="panel-title">
-        <h2>单一风扇曲线</h2>
-        <button id="reset-learning">清空学习偏移</button>
+        <div>
+          <h2>风扇曲线</h2>
+          <p class="subhead">基础曲线固定为 BS1 默认曲线，学习曲线由自动学习偏移实时生成。</p>
+        </div>
+        <button id="reset-learning" class="secondary" type="button">清空学习偏移</button>
       </div>
-      <svg id="curve-chart" viewBox="0 0 720 220" role="img"></svg>
-      <div id="curve-table" class="curve-table"></div>
+      <div class="legend">
+        <span><i class="base"></i>基础曲线</span>
+        <span><i class="learned"></i>学习曲线</span>
+        <span><i class="current"></i><b id="current-temp-label">当前 --°C</b></span>
+      </div>
+      <svg id="curve-chart" viewBox="0 0 760 300" role="img" aria-label="风扇曲线"></svg>
     </section>
 
     <section class="panel subtle">
@@ -184,9 +188,9 @@ STYLE_CSS = r""":root {
   --ink: #14221f;
   --muted: #65736f;
   --line: #dbe7e3;
-  --accent: #1f9d7a;
+  --accent: #16856b;
   --accent-2: #2878b8;
-  --warn: #c05621;
+  --danger: #d43b2a;
 }
 * { box-sizing: border-box; }
 body {
@@ -197,11 +201,11 @@ body {
 }
 main { max-width: 1120px; margin: 0 auto; padding: 28px; }
 header { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 20px; }
-h1 { margin: 0; font-size: 30px; }
-h2 { margin: 0; font-size: 18px; }
+h1 { margin: 0; font-size: 30px; letter-spacing: 0; }
+h2 { margin: 0; font-size: 18px; letter-spacing: 0; }
 p { margin: 6px 0 0; color: var(--muted); }
 button {
-  border: 1px solid var(--line);
+  border: 1px solid var(--ink);
   background: var(--ink);
   color: white;
   border-radius: 8px;
@@ -209,6 +213,13 @@ button {
   cursor: pointer;
 }
 button:hover { background: #233c36; }
+button.secondary {
+  background: #fbfefd;
+  color: var(--ink);
+  border-color: var(--line);
+}
+button.secondary:hover { background: #eef7f3; }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
 .status-grid {
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
@@ -226,9 +237,10 @@ article span { display: block; color: var(--muted); font-size: 12px; }
 article strong { display: block; margin-top: 8px; font-size: 22px; }
 .panel { padding: 16px; margin-top: 12px; }
 .panel-title { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 14px; }
+.subhead { font-size: 13px; }
 .form-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
 label { color: var(--muted); font-size: 13px; }
-input, select {
+input {
   width: 100%;
   margin-top: 5px;
   border: 1px solid var(--line);
@@ -240,22 +252,33 @@ input, select {
 .toggles { display: flex; align-items: center; flex-wrap: wrap; gap: 14px; margin-top: 14px; }
 .toggles label { display: flex; align-items: center; gap: 7px; }
 .toggles input { width: auto; margin: 0; }
-.curve-table { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; margin-top: 12px; }
-.curve-point { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; align-items: center; }
-.curve-point span { color: var(--muted); font-size: 12px; }
-svg { width: 100%; height: 220px; background: #f7fbfa; border: 1px solid var(--line); border-radius: 8px; }
+.legend { display: flex; flex-wrap: wrap; gap: 18px; align-items: center; margin: 0 0 10px; color: var(--muted); font-size: 13px; }
+.legend span { display: inline-flex; align-items: center; gap: 7px; }
+.legend i { width: 24px; height: 3px; border-radius: 999px; display: inline-block; }
+.legend .base { background: var(--accent-2); }
+.legend .learned { background: var(--accent); }
+.legend .current { width: 2px; height: 18px; background: repeating-linear-gradient(to bottom, var(--danger) 0 4px, transparent 4px 8px); }
+svg { width: 100%; height: 300px; background: #f7fbfa; border: 1px solid var(--line); border-radius: 8px; }
+.axis-label { fill: #65736f; font-size: 12px; }
+.tick { stroke: #dbe7e3; stroke-width: 1; }
+.curve-base { fill: none; stroke: var(--accent-2); stroke-width: 3; }
+.curve-learned { fill: none; stroke: var(--accent); stroke-width: 3; }
+.current-line { stroke: var(--danger); stroke-width: 2; stroke-dasharray: 6 6; }
+.current-tag { fill: var(--danger); font-size: 12px; font-weight: 600; }
 .subtle { color: var(--muted); display: grid; gap: 8px; }
 code { color: var(--accent-2); }
 @media (max-width: 860px) {
   main { padding: 18px; }
+  header, .panel-title { align-items: flex-start; flex-direction: column; }
   .status-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .curve-table { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .actions { justify-content: flex-start; }
 }
 """
 
 
 APP_JS = r"""let config = null;
+let currentTemp = 0;
 
 const $ = (id) => document.getElementById(id);
 
@@ -265,22 +288,30 @@ async function getJson(url) {
 }
 
 async function postJson(url, body = {}) {
-  const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const r = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
   return await r.json();
 }
 
-function tempText(v) { return v > 0 ? `${v}°C` : '--'; }
-function rpmText(v) { return v > 0 ? `${v}` : '--'; }
+function tempText(v) { return v > 0 ? `${Math.round(v)}°C` : '--'; }
+function rpmText(v) { return v > 0 ? `${Math.round(v)}` : '--'; }
+function clamp(v, low, high) { return Math.max(low, Math.min(high, v)); }
 
 async function refreshState() {
   const s = await getJson('/api/state');
+  currentTemp = Number(s.control_temp || 0);
   $('connected').textContent = s.connected ? '已连接' : '未连接';
   $('cpu').textContent = tempText(s.cpu_temp || 0);
   $('gpu').textContent = tempText(s.gpu_temp || 0);
-  $('control-temp').textContent = tempText(s.control_temp || 0);
+  $('control-temp').textContent = tempText(currentTemp);
   $('current-rpm').textContent = rpmText(s.current_rpm || 0);
   $('target-rpm').textContent = rpmText(s.target_rpm || s.last_sent_rpm || 0);
   $('error').textContent = s.last_error || '正常';
+  $('current-temp-label').textContent = currentTemp > 0 ? `当前 ${Math.round(currentTemp)}°C` : '当前 --°C';
+  if (config) drawChart();
 }
 
 async function loadConfig() {
@@ -291,42 +322,70 @@ async function loadConfig() {
   $('min-rpm-change').value = sc.min_rpm_change;
   $('ramp-up').value = sc.ramp_up_limit;
   $('ramp-down').value = sc.ramp_down_limit;
-  $('learn-rate').value = sc.learn_rate;
-  $('learn-window').value = sc.learn_window;
-  $('learn-delay').value = sc.learn_delay;
-  $('hysteresis').value = sc.hysteresis;
   $('learning').checked = !!sc.learning;
   $('spike-filter').checked = !!sc.filter_transient_spike;
   $('predictive').checked = !!sc.predictive_boost;
-  $('learning-bias').value = sc.learning_bias || 'balanced';
-  renderCurve();
+  drawChart();
 }
 
-function renderCurve() {
-  const table = $('curve-table');
-  table.innerHTML = '';
-  config.fan_curve.forEach((p, i) => {
-    const row = document.createElement('label');
-    row.className = 'curve-point';
-    row.innerHTML = `<span>${p.temperature}°C</span><input data-idx="${i}" type="number" min="0" max="5000" value="${p.rpm}">`;
-    table.appendChild(row);
+function learnedCurve() {
+  const points = config.fan_curve || [];
+  const offsets = config.smart_control?.learned_offsets || [];
+  const cap = Math.min(Number(config.smart_control?.max_learn_offset || 300), 600);
+  const rpms = points.map(p => p.rpm);
+  const minRpm = Math.min(...rpms);
+  const maxRpm = Math.max(...rpms);
+  let lastRpm = 0;
+  return points.map((p, i) => {
+    const offset = clamp(Number(offsets[i] || 0), -cap, cap);
+    const rpm = clamp(Math.max(lastRpm, p.rpm + offset), minRpm, maxRpm);
+    lastRpm = rpm;
+    return { temperature: p.temperature, rpm };
   });
-  drawChart();
 }
 
 function drawChart() {
   const svg = $('curve-chart');
-  const points = config.fan_curve;
-  const minT = points[0].temperature, maxT = points[points.length - 1].temperature;
-  const minR = Math.min(...points.map(p => p.rpm)), maxR = Math.max(...points.map(p => p.rpm));
-  const x = (t) => 36 + (t - minT) / (maxT - minT) * 648;
-  const y = (r) => 184 - (r - minR) / Math.max(1, maxR - minR) * 148;
-  const d = points.map((p, i) => `${i ? 'L' : 'M'} ${x(p.temperature).toFixed(1)} ${y(p.rpm).toFixed(1)}`).join(' ');
+  const base = config?.fan_curve || [];
+  if (base.length < 2) {
+    svg.innerHTML = '';
+    return;
+  }
+  const learned = learnedCurve();
+  const temps = base.map(p => p.temperature);
+  const allRpms = base.concat(learned).map(p => p.rpm);
+  const minT = Math.min(...temps);
+  const maxT = Math.max(...temps);
+  const minR = Math.max(0, Math.floor(Math.min(...allRpms) / 500) * 500);
+  const maxR = Math.ceil(Math.max(...allRpms) / 500) * 500;
+  const left = 56, right = 730, top = 26, bottom = 248;
+  const width = right - left, height = bottom - top;
+  const x = (t) => left + (t - minT) / (maxT - minT) * width;
+  const y = (r) => bottom - (r - minR) / Math.max(1, maxR - minR) * height;
+  const path = (points) => points.map((p, i) => `${i ? 'L' : 'M'} ${x(p.temperature).toFixed(1)} ${y(p.rpm).toFixed(1)}`).join(' ');
+  const tempTicks = [30, 40, 50, 60, 70, 80, 90, 100, 110].filter(t => t >= minT && t <= maxT);
+  const rpmTicks = [];
+  for (let r = minR; r <= maxR; r += 500) rpmTicks.push(r);
+  const currentX = currentTemp > 0 ? clamp(x(currentTemp), left, right) : null;
   svg.innerHTML = `
-    <line x1="36" y1="184" x2="684" y2="184" stroke="#cbd8d4"/>
-    <line x1="36" y1="36" x2="36" y2="184" stroke="#cbd8d4"/>
-    <path d="${d}" fill="none" stroke="#1f9d7a" stroke-width="3"/>
-    ${points.map(p => `<circle cx="${x(p.temperature)}" cy="${y(p.rpm)}" r="4" fill="#2878b8"/>`).join('')}
+    ${rpmTicks.map(r => `
+      <line class="tick" x1="${left}" y1="${y(r).toFixed(1)}" x2="${right}" y2="${y(r).toFixed(1)}"></line>
+      <text class="axis-label" x="12" y="${(y(r) + 4).toFixed(1)}">${r}</text>
+    `).join('')}
+    ${tempTicks.map(t => `
+      <line class="tick" x1="${x(t).toFixed(1)}" y1="${top}" x2="${x(t).toFixed(1)}" y2="${bottom}"></line>
+      <text class="axis-label" x="${(x(t) - 10).toFixed(1)}" y="278">${t}°</text>
+    `).join('')}
+    <line x1="${left}" y1="${bottom}" x2="${right}" y2="${bottom}" stroke="#b9c9c4"></line>
+    <line x1="${left}" y1="${top}" x2="${left}" y2="${bottom}" stroke="#b9c9c4"></line>
+    <path class="curve-base" d="${path(base)}"></path>
+    <path class="curve-learned" d="${path(learned)}"></path>
+    ${base.map(p => `<circle cx="${x(p.temperature).toFixed(1)}" cy="${y(p.rpm).toFixed(1)}" r="3.5" fill="#2878b8"></circle>`).join('')}
+    ${learned.map(p => `<circle cx="${x(p.temperature).toFixed(1)}" cy="${y(p.rpm).toFixed(1)}" r="3.5" fill="#16856b"></circle>`).join('')}
+    ${currentX === null ? '' : `
+      <line class="current-line" x1="${currentX.toFixed(1)}" y1="${top}" x2="${currentX.toFixed(1)}" y2="${bottom}"></line>
+      <text class="current-tag" x="${clamp(currentX + 8, left, right - 72).toFixed(1)}" y="20">当前 ${Math.round(currentTemp)}°C</text>
+    `}
   `;
 }
 
@@ -336,23 +395,28 @@ async function saveConfig() {
     min_rpm_change: Number($('min-rpm-change').value),
     ramp_up_limit: Number($('ramp-up').value),
     ramp_down_limit: Number($('ramp-down').value),
-    learn_rate: Number($('learn-rate').value),
-    learn_window: Number($('learn-window').value),
-    learn_delay: Number($('learn-delay').value),
-    hysteresis: Number($('hysteresis').value),
     learning: $('learning').checked,
     filter_transient_spike: $('spike-filter').checked,
-    predictive_boost: $('predictive').checked,
-    learning_bias: $('learning-bias').value
+    predictive_boost: $('predictive').checked
   };
-  const curve = config.fan_curve.map((p, i) => ({ temperature: p.temperature, rpm: Number(document.querySelector(`input[data-idx="${i}"]`).value) }));
-  config = await postJson('/api/config', { smart_control: smart, fan_curve: curve });
-  renderCurve();
+  config = await postJson('/api/config', { smart_control: smart });
+  await loadConfig();
+}
+
+async function resetDefaults() {
+  config = await postJson('/api/reset-defaults');
+  await loadConfig();
+}
+
+async function resetLearning() {
+  config = await postJson('/api/reset-learning');
+  drawChart();
 }
 
 $('save').addEventListener('click', saveConfig);
 $('reconnect').addEventListener('click', () => postJson('/api/reconnect'));
-$('reset-learning').addEventListener('click', async () => { config = await postJson('/api/reset-learning'); renderCurve(); });
+$('reset-defaults').addEventListener('click', resetDefaults);
+$('reset-learning').addEventListener('click', resetLearning);
 
 loadConfig();
 refreshState();

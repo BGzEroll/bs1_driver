@@ -6,6 +6,7 @@ from typing import Any
 
 from bs1_ble import BS1BleClient, BS1Status
 from config_store import ConfigStore, normalize_config
+from defaults import DEFAULT_SMART_CONTROL, default_config
 from runtime_state import RuntimeState
 from smart_control import SmartController
 from temperature import TemperatureReader
@@ -134,13 +135,26 @@ class Controller:
     def update_config(self, patch: dict[str, Any]) -> dict:
         with self.config_lock:
             next_cfg = dict(self.config)
-            if "fan_curve" in patch:
-                next_cfg["fan_curve"] = patch["fan_curve"]
             if "smart_control" in patch and isinstance(patch["smart_control"], dict):
                 smart = dict(next_cfg.get("smart_control", {}))
-                smart.update(patch["smart_control"])
-                if "learned_offsets" not in patch["smart_control"]:
-                    smart["learned_offsets"] = self.smart.learned_offsets()
+                allowed = {
+                    "target_temp",
+                    "min_rpm_change",
+                    "ramp_up_limit",
+                    "ramp_down_limit",
+                    "learning",
+                    "filter_transient_spike",
+                    "predictive_boost",
+                }
+                for key in allowed:
+                    if key in patch["smart_control"]:
+                        smart[key] = patch["smart_control"][key]
+                smart["learning_bias"] = "balanced"
+                smart["learn_rate"] = DEFAULT_SMART_CONTROL["learn_rate"]
+                smart["learn_window"] = DEFAULT_SMART_CONTROL["learn_window"]
+                smart["learn_delay"] = DEFAULT_SMART_CONTROL["learn_delay"]
+                smart["hysteresis"] = DEFAULT_SMART_CONTROL["hysteresis"]
+                smart["learned_offsets"] = self.smart.learned_offsets()
                 next_cfg["smart_control"] = smart
             if "temp_update_rate" in patch:
                 next_cfg["temp_update_rate"] = patch["temp_update_rate"]
@@ -150,6 +164,16 @@ class Controller:
             self.smart.configure(self.config)
             self.config_store.save(self.config)
             return self.config
+
+    def reset_defaults(self) -> dict:
+        with self.config_lock:
+            current_autostart = bool(self.config.get("autostart"))
+            self.config = normalize_config(default_config())
+            self.config["autostart"] = current_autostart
+            self.smart.configure(self.config)
+            self.config_store.save(self.config)
+            self.state.update(learning_dirty=False)
+            return self.get_config()
 
     def reset_learning(self) -> dict:
         with self.config_lock:
