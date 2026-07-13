@@ -4,6 +4,8 @@ import time
 from dataclasses import dataclass
 from typing import Any, Callable
 
+from defaults import DEFAULT_FAN_CURVE
+
 
 @dataclass
 class ControlResult:
@@ -25,15 +27,6 @@ class ThermalSample:
 
 
 @dataclass
-class ThermalPrediction:
-    cpu_temp: int = 0
-    gpu_temp: int = 0
-    control_temp: int = 0
-    cpu_rise: float = 0.0
-    gpu_rise: float = 0.0
-
-
-@dataclass
 class EqPoint:
     rpm: int
     temp: int
@@ -43,7 +36,6 @@ class EqPoint:
 class StableSample:
     bucket_idx: int = -1
     mean_temp: int = 0
-    mean_rpm: int = 0
     local_eff: float = 0.0
     have_eff: bool = False
     ready: bool = False
@@ -77,28 +69,17 @@ OFFSET_SMOOTH_NEIGHBOR_WEIGHT = 0.15
 OFFSET_SMOOTH_RADIUS = 2
 EQ_CONSISTENCY_BAND = 3
 
-NOISE_PROFILE_MIN_POINTS = 3
-NOISE_PROFILE_MIN_SPAN_RPM = 500
-NOISE_PROFILE_MIN_RISE_DB = 1.0
-NOISE_GAIN_RAW_MIN = 0.3
-NOISE_GAIN_RAW_MAX = 2.0
-NOISE_GAIN_MIN = 0.4
-NOISE_GAIN_MAX = 1.8
-NOISE_WEIGHT_BASELINE = 4.0
-
-
 class SmartController:
     def __init__(self, config: dict):
         self.configure(config)
         self.raw_history: list[int] = []
         self.control_history: list[int] = []
         self.last_target_rpm = -1
-        self.last_control_temp = -1
         self.steady = StableObserver(len(self.curve))
         self.predictor = ThermalPredictor()
 
     def configure(self, config: dict) -> None:
-        self.curve = normalize_curve(config.get("fan_curve", []))
+        self.curve = normalize_curve(DEFAULT_FAN_CURVE)
         self.smart = dict(config.get("smart_control", {}))
         self.offsets = list(self.smart.get("learned_offsets") or [0] * len(self.curve))
         if len(self.offsets) != len(self.curve):
@@ -138,21 +119,19 @@ class SmartController:
 
         learning_temp = control_temp
         if self.smart.get("predictive_boost", True):
-            prediction = self.predictor.observe(
+            predicted_temp = self.predictor.observe(
                 {
                     "cpu_temp": int(temp_sample.get("cpu_temp") or 0),
                     "gpu_temp": int(temp_sample.get("gpu_temp") or 0),
                     "cpu_power": float(temp_sample.get("cpu_power") or 0.0),
                     "gpu_power": float(temp_sample.get("gpu_power") or 0.0),
                     "control_temp": control_temp,
-                    "control_source": str(temp_sample.get("control_source") or "max"),
                 },
                 time.monotonic(),
-                str(temp_sample.get("control_source") or "max"),
                 int(self.smart.get("trend_gain", 5)),
             )
-            if prediction.control_temp > control_temp:
-                control_temp = prediction.control_temp
+            if predicted_temp > control_temp:
+                control_temp = predicted_temp
         else:
             self.predictor.reset()
 
@@ -182,7 +161,6 @@ class SmartController:
                 self.offsets, learning_changed = learn_steady_offset(
                     steady.bucket_idx,
                     steady.mean_temp,
-                    steady.mean_rpm,
                     steady.local_eff,
                     steady.have_eff,
                     self.curve,
@@ -201,7 +179,6 @@ class SmartController:
         )
         if should_send:
             self.last_target_rpm = target
-        self.last_control_temp = learning_temp
         return ControlResult(target, base_rpm, control_temp, spike_suppressed, learning_changed, should_send)
 
 
@@ -212,7 +189,7 @@ class ThermalPredictor:
     def reset(self) -> None:
         self.samples.clear()
 
-    def observe(self, temp: dict[str, Any], at: float, source: str, trend_gain: int) -> ThermalPrediction:
+    def observe(self, temp: dict[str, Any], at: float, trend_gain: int) -> int:
         if not at:
             at = time.monotonic()
         sample = ThermalSample(
@@ -231,13 +208,7 @@ class ThermalPredictor:
         gpu_rise = predicted_rise(self.samples, lambda s: s.gpu_temp, lambda s: s.gpu_power, gain)
         cpu_temp = sample.cpu_temp + round_float(cpu_rise) if sample.cpu_temp > 0 else 0
         gpu_temp = sample.gpu_temp + round_float(gpu_rise) if sample.gpu_temp > 0 else 0
-        return ThermalPrediction(
-            cpu_temp=cpu_temp,
-            gpu_temp=gpu_temp,
-            control_temp=resolve_control_temp(cpu_temp, gpu_temp, source),
-            cpu_rise=cpu_rise,
-            gpu_rise=gpu_rise,
-        )
+        return max(cpu_temp, gpu_temp)
 
 
 class StableObserver:
@@ -253,9 +224,6 @@ class StableObserver:
         self.last_t = [0] * curve_len
         self.last_r = [0] * curve_len
         self.seen = [False] * curve_len
-
-    def curve_len_value(self) -> int:
-        return self.curve_len
 
     def resize(self, curve_len: int) -> None:
         curve_len = max(curve_len, 1)
@@ -326,7 +294,7 @@ class StableObserver:
 
         self.record_equilibrium(idx, mean_r, mean_t)
         eff, have_eff = self.local_efficiency(idx)
-        return StableSample(idx, mean_t, mean_r, eff, have_eff, True)
+        return StableSample(idx, mean_t, eff, have_eff, True)
 
     def record_equilibrium(self, idx: int, rpm: int, temp: int) -> None:
         if idx < 0 or idx >= len(self.history):
@@ -377,8 +345,6 @@ def calculate_target_rpm(temp: int, curve: list[dict], offsets: list[int], cfg: 
     if not curve:
         return 0
     active_offsets = offsets if cfg.get("learning", True) else []
-    if cfg.get("learning", True):
-        active_offsets, _ = constrain_offsets_to_learning_bias(active_offsets, cfg.get("learning_bias", "balanced"))
     rpm = curve_rpm(temp, build_effective_curve(curve, active_offsets, effective_offset_cap(cfg)))
     if rpm <= 0:
         return 0
@@ -397,17 +363,9 @@ def build_effective_curve(curve: list[dict], offsets: list[int], cap: int) -> li
     return out
 
 
-def effective_curve(curve: list[dict], offsets: list[int], cfg: dict) -> list[dict]:
-    active_offsets = offsets if cfg.get("learning", True) else []
-    if cfg.get("learning", True):
-        active_offsets, _ = constrain_offsets_to_learning_bias(active_offsets, cfg.get("learning_bias", "balanced"))
-    return build_effective_curve(curve, active_offsets, effective_offset_cap(cfg))
-
-
 def learn_steady_offset(
     bucket: int,
     steady_temp: int,
-    steady_rpm: int,
     local_eff: float,
     have_eff: bool,
     curve: list[dict],
@@ -418,10 +376,7 @@ def learn_steady_offset(
         return offsets, False
 
     next_offsets = [offsets[i] if i < len(offsets) else 0 for i in range(len(curve))]
-    if steady_rpm <= 0:
-        steady_rpm = curve[bucket]["rpm"] + next_offsets[bucket]
-
-    main_delta = solve_learn_step(steady_temp, steady_rpm, local_eff, have_eff, cfg)
+    main_delta = solve_learn_step(steady_temp, local_eff, have_eff, cfg)
     if main_delta == 0:
         return next_offsets, False
 
@@ -440,14 +395,12 @@ def learn_steady_offset(
         )
 
     apply(bucket, main_delta)
-    next_offsets, _ = constrain_offsets_to_learning_bias(next_offsets, cfg.get("learning_bias", "balanced"))
     smooth_offsets(curve, next_offsets, bucket, cap, min_rpm, max_rpm)
-    next_offsets, _ = constrain_offsets_to_learning_bias(next_offsets, cfg.get("learning_bias", "balanced"))
     enforce_monotonic_with_offsets(curve, next_offsets, cap, min_rpm, max_rpm)
     return next_offsets, next_offsets != offsets
 
 
-def solve_learn_step(steady_temp: int, steady_rpm: int, eff: float, have_eff: bool, cfg: dict) -> int:
+def solve_learn_step(steady_temp: int, eff: float, have_eff: bool, cfg: dict) -> int:
     ceiling = target_temp_ceiling(cfg)
     low_target = ceiling - comfort_band_width(cfg)
     alpha = alpha_from_learn_rate(int(cfg.get("learn_rate", 3)))
@@ -462,7 +415,7 @@ def solve_learn_step(steady_temp: int, steady_rpm: int, eff: float, have_eff: bo
         if step < MIN_SAFETY_STEP:
             step = MIN_SAFETY_STEP
     elif steady_temp < low_target:
-        step = -alpha * (low_target - steady_temp) / eff * noise_down_gain(steady_rpm, cfg)
+        step = -alpha * (low_target - steady_temp) / eff
     else:
         return 0
 
@@ -589,14 +542,6 @@ def power_step_lead(samples: list[ThermalSample], power: Callable[[ThermalSample
     return min(surge * 0.018 * gain, MAX_POWER_LEAD)
 
 
-def resolve_control_temp(cpu_temp: int, gpu_temp: int, source: str) -> int:
-    if source == "cpu":
-        return cpu_temp
-    if source == "gpu":
-        return gpu_temp
-    return max(cpu_temp, gpu_temp)
-
-
 def normalize_curve(curve: list[dict]) -> list[dict]:
     points = []
     for point in curve:
@@ -635,23 +580,6 @@ def clamp_offset_for_point(offset: int, base_rpm: int, min_rpm: int, max_rpm: in
     if low > high:
         return 0
     return clamp(offset, low, high)
-
-
-def constrain_offsets_to_learning_bias(offsets: list[int], bias: str) -> tuple[list[int], bool]:
-    if not offsets:
-        return offsets, False
-    if bias not in {"cooling", "quiet"}:
-        return offsets, False
-    out = list(offsets)
-    changed = False
-    for i, offset in enumerate(out):
-        if bias == "cooling" and offset < 0:
-            out[i] = 0
-            changed = True
-        elif bias == "quiet" and offset > 0:
-            out[i] = 0
-            changed = True
-    return out, changed
 
 
 def enforce_non_decreasing_rpm(curve: list[dict]) -> None:
@@ -719,53 +647,6 @@ def target_temp_ceiling(cfg: dict) -> int:
 
 def comfort_band_width(cfg: dict) -> int:
     return max(int(cfg.get("hysteresis", 2)) + 3, 3)
-
-
-def noise_down_gain(rpm: int, cfg: dict) -> float:
-    profile = cfg.get("noise_profile") or []
-    if len(profile) < NOISE_PROFILE_MIN_POINTS or int(cfg.get("noise_weight", 4)) <= 0 or rpm <= 0:
-        return 1.0
-    cleaned = []
-    for item in profile:
-        if not isinstance(item, dict):
-            continue
-        point_rpm = int(item.get("rpm") or 0)
-        db = float(item.get("db") or 0.0)
-        cleaned.append({"rpm": point_rpm, "db": db})
-    cleaned.sort(key=lambda p: p["rpm"])
-    if len(cleaned) < NOISE_PROFILE_MIN_POINTS:
-        return 1.0
-    span = cleaned[-1]["rpm"] - cleaned[0]["rpm"]
-    total_rise = cleaned[-1]["db"] - cleaned[0]["db"]
-    if span < NOISE_PROFILE_MIN_SPAN_RPM or total_rise < NOISE_PROFILE_MIN_RISE_DB:
-        return 1.0
-    local, ok = local_noise_slope(rpm, cleaned)
-    if not ok:
-        return 1.0
-    avg_slope = total_rise / span
-    if avg_slope <= 0:
-        return 1.0
-    raw = clamp_float(local / avg_slope, NOISE_GAIN_RAW_MIN, NOISE_GAIN_RAW_MAX)
-    influence = min(float(cfg.get("noise_weight", 4)) / NOISE_WEIGHT_BASELINE, 1.5)
-    gain = 1 + (raw - 1) * influence
-    return clamp_float(gain, NOISE_GAIN_MIN, NOISE_GAIN_MAX)
-
-
-def local_noise_slope(rpm: int, profile: list[dict]) -> tuple[float, bool]:
-    if len(profile) < 2:
-        return 0.0, False
-    seg = len(profile) - 2
-    for i in range(len(profile) - 1):
-        if rpm < profile[i + 1]["rpm"]:
-            seg = i
-            break
-    lo = max(seg - 1, 0)
-    hi = min(seg + 2, len(profile) - 1)
-    span = profile[hi]["rpm"] - profile[lo]["rpm"]
-    if span <= 0:
-        return 0.0, False
-    slope = (profile[hi]["db"] - profile[lo]["db"]) / span
-    return max(slope, 0.0), True
 
 
 def should_apply_ramp_limit(target: int, previous: int) -> bool:

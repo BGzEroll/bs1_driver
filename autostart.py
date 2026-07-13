@@ -17,8 +17,6 @@ def executable_command() -> str:
 
 
 def set_autostart(enabled: bool) -> None:
-    if sys.platform != "win32":
-        return
     import winreg
 
     with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as key:
@@ -32,8 +30,6 @@ def set_autostart(enabled: bool) -> None:
 
 
 def is_autostart_enabled() -> bool:
-    if sys.platform != "win32":
-        return False
     import winreg
 
     try:

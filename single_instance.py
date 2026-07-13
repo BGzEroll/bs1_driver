@@ -28,20 +28,19 @@ class SingleInstance:
         self._handle = handle
 
     @classmethod
-    def acquire(cls, show_message: bool = True) -> SingleInstance | None:
+    def acquire(cls) -> SingleInstance | None:
         ctypes.set_last_error(0)
         handle = kernel32.CreateMutexW(None, True, MUTEX_NAME)
         if not handle:
             raise ctypes.WinError(ctypes.get_last_error())
         if ctypes.get_last_error() == ERROR_ALREADY_EXISTS:
             kernel32.CloseHandle(handle)
-            if show_message:
-                user32.MessageBoxW(
-                    None,
-                    "BS1 Controller 已经在运行。",
-                    "BS1 Controller",
-                    MB_OK | MB_ICONINFORMATION | MB_SETFOREGROUND,
-                )
+            user32.MessageBoxW(
+                None,
+                "BS1 Controller 已经在运行。",
+                "BS1 Controller",
+                MB_OK | MB_ICONINFORMATION | MB_SETFOREGROUND,
+            )
             return None
         return cls(handle)
 
@@ -51,4 +50,3 @@ class SingleInstance:
         kernel32.ReleaseMutex(self._handle)
         kernel32.CloseHandle(self._handle)
         self._handle = 0
-

@@ -6,7 +6,7 @@ from typing import Any
 
 from bs1_ble import BS1BleClient, BS1Status
 from config_store import ConfigStore, normalize_config
-from defaults import DEFAULT_SMART_CONTROL, default_config
+from defaults import CONTROL_INTERVAL_SECONDS, DEFAULT_FAN_CURVE, DEFAULT_SMART_CONTROL, default_config
 from runtime_state import RuntimeState
 from smart_control import SmartController
 from temperature import TemperatureReader
@@ -42,7 +42,6 @@ class Controller:
     def run_loop(self) -> None:
         while not self.stop_event.is_set():
             loop_started = time.monotonic()
-            cfg = self.get_config()
 
             if not self.ble.is_connected() and time.monotonic() >= self.reconnect_after:
                 self.try_connect()
@@ -54,7 +53,6 @@ class Controller:
                 cpu_power=round(sample.cpu_power, 1),
                 gpu_power=round(sample.gpu_power, 1),
                 control_temp=sample.control_temp,
-                control_source=sample.control_source,
                 cpu_model=sample.cpu_model,
                 gpu_model=sample.gpu_model,
                 cpu_temp_source=sample.cpu_temp_source,
@@ -65,8 +63,8 @@ class Controller:
                 if self.ble.last_heartbeat_at
                 else 0,
             )
-            if sample.error:
-                self.state.set_error(sample.error)
+            if sample.temperature_error:
+                self.state.set_error(sample.temperature_error)
             elif str(self.state.snapshot().get("last_error") or "").startswith(
                 ("CPU temperature unavailable", "GPU temperature unavailable")
             ):
@@ -81,7 +79,6 @@ class Controller:
                         "cpu_power": sample.cpu_power,
                         "gpu_power": sample.gpu_power,
                         "control_temp": sample.control_temp,
-                        "control_source": sample.control_source,
                     },
                     int(snapshot.get("current_rpm") or 0),
                     int(snapshot.get("target_rpm") or 0),
@@ -96,7 +93,7 @@ class Controller:
                     try:
                         if self.ble.set_target_rpm(result.target_rpm):
                             self.state.update(last_sent_rpm=result.target_rpm)
-                            if not sample.error:
+                            if not sample.temperature_error:
                                 self.state.clear_error()
                     except Exception as exc:
                         try:
@@ -111,7 +108,7 @@ class Controller:
 
             self.save_learning_if_needed()
             elapsed = time.monotonic() - loop_started
-            delay = max(0.2, float(cfg.get("temp_update_rate", 2)) - elapsed)
+            delay = max(0.2, CONTROL_INTERVAL_SECONDS - elapsed)
             self.stop_event.wait(delay)
 
     def try_connect(self) -> None:
@@ -155,7 +152,9 @@ class Controller:
 
     def get_config(self) -> dict:
         with self.config_lock:
-            return normalize_config(self.config)
+            cfg = normalize_config(self.config)
+            cfg["fan_curve"] = [dict(point) for point in DEFAULT_FAN_CURVE]
+            return cfg
 
     def update_config(self, patch: dict[str, Any]) -> dict:
         with self.config_lock:
@@ -174,21 +173,18 @@ class Controller:
                 for key in allowed:
                     if key in patch["smart_control"]:
                         smart[key] = patch["smart_control"][key]
-                smart["learning_bias"] = "balanced"
                 smart["learn_rate"] = DEFAULT_SMART_CONTROL["learn_rate"]
                 smart["learn_window"] = DEFAULT_SMART_CONTROL["learn_window"]
                 smart["learn_delay"] = DEFAULT_SMART_CONTROL["learn_delay"]
                 smart["hysteresis"] = DEFAULT_SMART_CONTROL["hysteresis"]
                 smart["learned_offsets"] = self.smart.learned_offsets()
                 next_cfg["smart_control"] = smart
-            if "temp_update_rate" in patch:
-                next_cfg["temp_update_rate"] = patch["temp_update_rate"]
             if "autostart" in patch:
                 next_cfg["autostart"] = bool(patch["autostart"])
             self.config = normalize_config(next_cfg)
             self.smart.configure(self.config)
             self.config_store.save(self.config)
-            return self.config
+            return self.get_config()
 
     def reset_defaults(self) -> dict:
         with self.config_lock:

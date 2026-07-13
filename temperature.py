@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import ctypes
 import os
-import sys
 import threading
 import time
 from ctypes import wintypes
@@ -40,14 +39,12 @@ class TemperatureSample:
     cpu_power: float = 0.0
     gpu_power: float = 0.0
     control_temp: int = 0
-    control_source: str = "max"
     cpu_model: str = ""
     gpu_model: str = ""
     cpu_temp_source: str = ""
     gpu_temp_source: str = ""
     temperature_ok: bool = False
     temperature_error: str = ""
-    error: str = ""
 
 
 class PdhThermalZoneReader:
@@ -298,7 +295,6 @@ class TemperatureReader:
             gpu_temp_source=self._gpu.source_name,
             temperature_ok=cpu > 0 and gpu > 0,
             temperature_error=error,
-            error=error,
         )
 
     def close(self) -> None:
@@ -360,8 +356,6 @@ def configure_nvml_api(nvml: ctypes.WinDLL) -> None:
 
 
 def read_cpu_model() -> str:
-    if sys.platform != "win32":
-        return ""
     try:
         import winreg
 

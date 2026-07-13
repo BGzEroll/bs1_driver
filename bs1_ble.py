@@ -4,13 +4,9 @@ import asyncio
 import threading
 import time
 from dataclasses import dataclass
-from typing import Callable, Optional
+from typing import Callable
 
-try:
-    from bleak import BleakClient, BleakScanner
-except Exception:  # pragma: no cover - bleak is optional until installed.
-    BleakClient = None
-    BleakScanner = None
+from bleak import BleakClient, BleakScanner
 
 SERVICE_UUID = "0000fff0-0000-1000-8000-00805f9b34fb"
 NOTIFY_UUID = "0000fff1-0000-1000-8000-00805f9b34fb"
@@ -20,7 +16,6 @@ WRITE_UUID = "0000fff2-0000-1000-8000-00805f9b34fb"
 class BS1Status:
     current_rpm: int = 0
     target_rpm: int = 0
-    mode: int = 0
     work_mode: str = ""
     gear_setting: str = ""
     max_gear: str = ""
@@ -55,7 +50,6 @@ def parse_status_notify(data: bytes | bytearray) -> BS1Status | None:
     return BS1Status(
         current_rpm=current,
         target_rpm=target,
-        mode=mode,
         work_mode=decode_work_mode(mode),
         gear_setting=f"0x{gear:02X}",
         max_gear=max_gear,
@@ -138,8 +132,6 @@ class BS1BleClient:
         return future.result(timeout=timeout)
 
     async def _connect(self) -> bool:
-        if BleakScanner is None or BleakClient is None:
-            raise RuntimeError("Missing dependency: install bleak first")
         if self.client and self.client.is_connected:
             return True
         devices = await BleakScanner.discover(timeout=8)

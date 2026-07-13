@@ -23,7 +23,6 @@ class RuntimeState:
             "temperature_ok": False,
             "temperature_error": "",
             "control_temp": 0,
-            "control_source": "max",
             "current_rpm": 0,
             "target_rpm": 0,
             "last_sent_rpm": 0,
