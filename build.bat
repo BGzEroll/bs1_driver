@@ -10,6 +10,7 @@ set PY=%CONDA_ROOT%\python.exe
   --onefile ^
   --windowed ^
   --name BS1Controller ^
+  --icon "%CD%\assets\thrm.ico" ^
   --paths "%CD%" ^
   --hidden-import bleak.backends.winrt.client ^
   --hidden-import bleak.backends.winrt.scanner ^

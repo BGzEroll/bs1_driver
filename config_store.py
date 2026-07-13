@@ -78,9 +78,12 @@ def normalize_config(cfg: dict[str, Any]) -> dict:
     smart["learn_delay"] = clamp_int(smart.get("learn_delay"), 0, 8, 3)
     smart["overheat_weight"] = clamp_int(smart.get("overheat_weight"), 1, 12, 8)
     smart["rpm_delta_weight"] = clamp_int(smart.get("rpm_delta_weight"), 1, 12, 5)
+    smart["noise_weight"] = clamp_int(smart.get("noise_weight"), 0, 12, 4)
     smart["trend_gain"] = clamp_int(smart.get("trend_gain"), 1, 12, 5)
     smart["max_learn_offset"] = clamp_int(smart.get("max_learn_offset"), 100, 2000, 300)
     smart["learned_offsets"] = normalize_offsets(smart.get("learned_offsets"), len(out["fan_curve"]))
+    smart["noise_profile"] = normalize_noise_profile(smart.get("noise_profile"))
+    smart["noise_profile_updated_at"] = clamp_int(smart.get("noise_profile_updated_at"), 0, 9999999999, 0)
     out["smart_control"] = smart
     return out
 
@@ -121,6 +124,36 @@ def normalize_offsets(value: Any, size: int) -> list[int]:
     while len(offsets) < size:
         offsets.append(0)
     return offsets
+
+
+def normalize_noise_profile(value: Any) -> list[dict]:
+    if not isinstance(value, list):
+        return []
+    points = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        rpm = clamp_int(item.get("rpm"), 1, 20000, None)
+        try:
+            db = float(item.get("db"))
+        except (TypeError, ValueError):
+            continue
+        if rpm is None or db != db or db < -200 or db > 200:
+            continue
+        points.append({"rpm": rpm, "db": db})
+    points.sort(key=lambda p: p["rpm"])
+    deduped = []
+    for point in points[:64]:
+        if deduped and deduped[-1]["rpm"] == point["rpm"]:
+            deduped[-1] = point
+        else:
+            deduped.append(point)
+    if len(deduped) < 2:
+        return []
+    min_db = min(point["db"] for point in deduped)
+    for point in deduped:
+        point["db"] = point["db"] - min_db
+    return deduped
 
 
 def clamp_int(value: Any, low: int, high: int, fallback: int | None) -> int | None:

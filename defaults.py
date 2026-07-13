@@ -39,9 +39,12 @@ DEFAULT_SMART_CONTROL = {
     "learn_delay": 3,
     "overheat_weight": 8,
     "rpm_delta_weight": 5,
+    "noise_weight": 4,
     "trend_gain": 5,
     "max_learn_offset": 300,
     "learned_offsets": [],
+    "noise_profile": [],
+    "noise_profile_updated_at": 0,
 }
 
 
@@ -55,4 +58,3 @@ def default_config() -> dict:
         "fan_curve": [dict(point) for point in DEFAULT_FAN_CURVE],
         "smart_control": dict(DEFAULT_SMART_CONTROL),
     }
-

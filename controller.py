@@ -64,8 +64,12 @@ class Controller:
                 snapshot = self.state.snapshot()
                 result = self.smart.compute(
                     {
-                        "control_temp": sample.control_temp,
+                        "cpu_temp": sample.cpu_temp,
+                        "gpu_temp": sample.gpu_temp,
+                        "cpu_power": 0.0,
                         "gpu_power": sample.gpu_power,
+                        "control_temp": sample.control_temp,
+                        "control_source": sample.control_source,
                     },
                     int(snapshot.get("current_rpm") or 0),
                     int(snapshot.get("target_rpm") or 0),
